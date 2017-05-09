@@ -18,7 +18,7 @@ leb128 = "0.2.1"
 [dev-dependencies]
 getopts = "0.2"
 memmap = "0.4.0"
-object = "0.3.0"
+object = { git = "https://github.com/philipc/object", rev = "641747c4d2e59b98052de5d9cbb5b0696404d56b" }
 test-assembler = "0.1.3"
 
 [features]
