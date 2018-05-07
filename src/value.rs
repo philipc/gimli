@@ -149,6 +149,52 @@ impl ValueType {
     }
 }
 
+// Converts from:
+//
+//        match_binop! {
+//            let (v1, v2) = (self, rhs);
+//            F32 | F64 => v1 + v2,
+//            _ => return Err(Error::TypeMismatch)
+//        }
+//
+// to:
+//
+//        match (self, rhs) {
+//            (F32(v1), F32(v2)) => Ok(F32(v1 + v2)),
+//            (F64(v1), F64(v2)) => Ok(F64(v1 + v2)),
+//            _ => Err(Error::TypeMismatch)
+//        }
+macro_rules! match_binop {
+    // parse the last case plus the fallback
+    (@inner ($v1:ident, $v2:ident), $value:expr, ($($value_type:path)|+ => $result:expr, _ => $fallback:expr) -> ($($parsed:tt)*) ) => {
+        match_binop!(@inner ($v1, $v2), $value, () -> ($($parsed)* ($($value_type)|* => $result)) $fallback)
+    };
+
+    // parse a case (not the last one)
+    (@inner ($v1:ident, $v2:ident), $value:expr, ($($value_type:path)|+ => $result:expr, $($rest:tt)*) -> ($($parsed:tt)*) ) => {
+        match_binop!(@inner ($v1, $v2), $value, ($($rest)*) -> ($($parsed)* ($($value_type)|* => $result)))
+    };
+
+    // finished parsing
+    (@inner ($v1:ident, $v2:ident), $value:expr, () -> ($(($($value_type:path)|+ => $result:expr))*) $fallback:expr ) => {
+        {
+            match $value {
+                $(
+                    $(
+                        ($value_type($v1), $value_type($v2)) => Ok($value_type($result)),
+                    )+
+                )+
+                _ => $fallback
+            }
+        }
+    };
+
+    // entry point, start parsing
+    ( let ($v1:ident, $v2:ident) = ($e1:expr, $e2:expr); $($rest:tt)* ) => {
+        match_binop!(@inner ($v1, $v2), ($e1, $e2), ($($rest)*) -> ())
+    };
+}
+
 impl Value {
     /// Return the `ValueType` corresponding to this `Value`.
     pub fn value_type(&self) -> ValueType {
@@ -382,23 +428,14 @@ impl Value {
     ///
     /// This corresponds to the DWARF `DW_OP_plus` operation.
     pub fn add(self, rhs: Value, addr_mask: u64) -> Result<Value> {
-        let value = match (self, rhs) {
-            (Value::Generic(v1), Value::Generic(v2)) => {
-                Value::Generic(v1.wrapping_add(v2) & addr_mask)
-            }
-            (Value::I8(v1), Value::I8(v2)) => Value::I8(v1.wrapping_add(v2)),
-            (Value::U8(v1), Value::U8(v2)) => Value::U8(v1.wrapping_add(v2)),
-            (Value::I16(v1), Value::I16(v2)) => Value::I16(v1.wrapping_add(v2)),
-            (Value::U16(v1), Value::U16(v2)) => Value::U16(v1.wrapping_add(v2)),
-            (Value::I32(v1), Value::I32(v2)) => Value::I32(v1.wrapping_add(v2)),
-            (Value::U32(v1), Value::U32(v2)) => Value::U32(v1.wrapping_add(v2)),
-            (Value::I64(v1), Value::I64(v2)) => Value::I64(v1.wrapping_add(v2)),
-            (Value::U64(v1), Value::U64(v2)) => Value::U64(v1.wrapping_add(v2)),
-            (Value::F32(v1), Value::F32(v2)) => Value::F32(v1 + v2),
-            (Value::F64(v1), Value::F64(v2)) => Value::F64(v1 + v2),
-            _ => return Err(Error::TypeMismatch),
-        };
-        Ok(value)
+        use Value::*;
+        match_binop! {
+            let (v1, v2) = (self, rhs);
+            Generic => v1.wrapping_add(v2) & addr_mask,
+            I8 | U8 | I16 | U16 | I32 | U32 | I64 | U64 => v1.wrapping_add(v2),
+            F32 | F64 => v1 + v2,
+            _ => Err(Error::TypeMismatch)
+        }
     }
 
     /// Perform a subtraction operation.
