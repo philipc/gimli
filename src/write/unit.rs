@@ -262,7 +262,7 @@ impl CompilationUnit {
             debug_info_refs,
         )?;
 
-        let length = (w.len() - length_base) as u64;
+        let length = w.len() - length_base;
         w.write_initial_length_at(length_offset, length, self.format)?;
 
         for (offset, entry) in unit_refs {
@@ -271,7 +271,7 @@ impl CompilationUnit {
             // This does not need relocation.
             w.write_word_at(
                 offset.0,
-                (entry_offset - offsets.unit.0) as u64,
+                entry_offset - offsets.unit.0,
                 self.format.word_size(),
             )?;
         }
@@ -479,7 +479,7 @@ impl DebuggingInformationEntry {
         }
 
         if let Some(offset) = sibling_offset {
-            let next_offset = (w.offset().0 - offsets.unit.0) as u64;
+            let next_offset = w.offset().0 - offsets.unit.0;
             // This does not need relocation.
             w.write_word_at(offset.0, next_offset, unit.format.word_size())?;
         }
@@ -852,7 +852,7 @@ impl AttributeValue {
                     Format::Dwarf32 => debug_assert_form!(constants::DW_FORM_ref_sup4),
                     Format::Dwarf64 => debug_assert_form!(constants::DW_FORM_ref_sup8),
                 }
-                w.write_word(val.0 as u64, unit.format.word_size())?;
+                w.write_word(val.0, unit.format.word_size())?;
             }
             AttributeValue::LineProgramRef(val) => {
                 debug_assert_form!(constants::DW_FORM_sec_offset);
@@ -896,7 +896,7 @@ impl AttributeValue {
             }
             AttributeValue::DebugStrRefSup(val) => {
                 debug_assert_form!(constants::DW_FORM_strp_sup);
-                w.write_word(val.0 as u64, unit.format.word_size())?;
+                w.write_word(val.0, unit.format.word_size())?;
             }
             AttributeValue::String(ref val) => {
                 debug_assert_form!(constants::DW_FORM_string);
@@ -1045,7 +1045,7 @@ mod convert {
     use read::{self, Reader};
     use write::{self, ConvertError, ConvertResult};
 
-    pub(crate) struct ConvertUnitContext<'a, R: Reader<Offset = usize> + 'a> {
+    pub(crate) struct ConvertUnitContext<'a, R: Reader + 'a> {
         pub debug_str: &'a read::DebugStr<R>,
         pub strings: &'a mut write::StringTable,
         pub convert_address: &'a Fn(u64) -> Option<Address>,
@@ -1064,7 +1064,7 @@ mod convert {
         /// `Address::Absolute(address)`. For relocatable addresses, it is the caller's
         /// responsibility to determine the symbol and addend corresponding to the address
         /// and return `Address::Relative { symbol, addend }`.
-        pub fn from<R: Reader<Offset = usize>>(
+        pub fn from<R: Reader>(
             debug_abbrev: &read::DebugAbbrev<R>,
             debug_info: &read::DebugInfo<R>,
             debug_line: &read::DebugLine<R>,
@@ -1124,7 +1124,7 @@ mod convert {
     impl CompilationUnit {
         /// Create a compilation unit by reading the data in the given sections.
         #[allow(clippy::too_many_arguments)]
-        pub(crate) fn from<R: Reader<Offset = usize>>(
+        pub(crate) fn from<R: Reader>(
             from_unit: &read::CompilationUnitHeader<R>,
             unit_id: UnitId,
             unit_entry_offsets: &mut HashMap<DebugInfoOffset, (UnitId, UnitEntryId)>,
@@ -1190,7 +1190,7 @@ mod convert {
 
     impl DebuggingInformationEntry {
         /// Create an entry by reading the data in the given sections.
-        pub(crate) fn from<R: Reader<Offset = usize>>(
+        pub(crate) fn from<R: Reader>(
             context: &mut ConvertUnitContext<R>,
             from: read::EntriesTreeNode<R>,
             from_unit: &read::CompilationUnitHeader<R>,
@@ -1239,7 +1239,7 @@ mod convert {
 
     impl Attribute {
         /// Create an attribute by reading the data in the given sections.
-        pub(crate) fn from<R: Reader<Offset = usize>>(
+        pub(crate) fn from<R: Reader>(
             context: &mut ConvertUnitContext<R>,
             from: &read::Attribute<R>,
             from_unit: &read::CompilationUnitHeader<R>,
@@ -1254,7 +1254,7 @@ mod convert {
 
     impl AttributeValue {
         /// Create an attribute value by reading the data in the given sections.
-        pub(crate) fn from<R: Reader<Offset = usize>>(
+        pub(crate) fn from<R: Reader>(
             context: &mut ConvertUnitContext<R>,
             from: read::AttributeValue<R>,
             from_unit: &read::CompilationUnitHeader<R>,
@@ -2077,7 +2077,7 @@ mod tests {
             add_child(unit, root, constants::DW_TAG_subprogram, "child3");
         }
 
-        fn next_child<R: read::Reader<Offset = usize>>(
+        fn next_child<R: read::Reader>(
             entries: &mut read::EntriesCursor<R>,
         ) -> (read::UnitOffset, Option<read::UnitOffset>) {
             let (_, entry) = entries.next_dfs().unwrap().unwrap();
@@ -2093,7 +2093,7 @@ mod tests {
             (offset, sibling)
         }
 
-        fn check_sibling<R: read::Reader<Offset = usize>>(
+        fn check_sibling<R: read::Reader>(
             unit: &read::CompilationUnitHeader<R>,
             debug_abbrev: &read::DebugAbbrev<R>,
         ) {

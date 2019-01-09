@@ -1,7 +1,7 @@
 use vec::Vec;
 
 use endianity::Endianity;
-use write::{Error, Result, Writer};
+use write::{Error, Result, Writer, WriterOffset};
 
 /// A `Vec<u8>` with endianity metadata.
 ///
@@ -50,8 +50,8 @@ where
     }
 
     #[inline]
-    fn len(&self) -> usize {
-        self.vec.len()
+    fn len(&self) -> WriterOffset {
+        self.vec.len() as WriterOffset
     }
 
     fn write(&mut self, bytes: &[u8]) -> Result<()> {
@@ -59,11 +59,15 @@ where
         Ok(())
     }
 
-    fn write_at(&mut self, offset: usize, bytes: &[u8]) -> Result<()> {
-        if offset > self.vec.len() {
+    fn write_at(&mut self, offset: WriterOffset, bytes: &[u8]) -> Result<()> {
+        let offset_usize = offset as usize;
+        if offset_usize as WriterOffset != offset {
             return Err(Error::OffsetOutOfBounds);
         }
-        let to = &mut self.vec[offset..];
+        if offset_usize > self.vec.len() {
+            return Err(Error::OffsetOutOfBounds);
+        }
+        let to = &mut self.vec[offset_usize..];
         if bytes.len() > to.len() {
             return Err(Error::LengthOutOfBounds);
         }

@@ -12,7 +12,7 @@ use string::String;
 use Arc;
 
 use endianity::Endianity;
-use read::{Error, Reader, Result};
+use read::{Error, Reader, ReaderOffset, Result};
 
 /// A reference counted, non-thread-safe slice of bytes and associated
 /// endianity.
@@ -356,7 +356,6 @@ where
     T: CloneStableDeref<Target = [u8]> + Debug,
 {
     type Endian = Endian;
-    type Offset = usize;
 
     #[inline]
     fn endian(&self) -> Endian {
@@ -364,8 +363,8 @@ where
     }
 
     #[inline]
-    fn len(&self) -> usize {
-        self.range.len()
+    fn len(&self) -> ReaderOffset {
+        self.range.len() as ReaderOffset
     }
 
     #[inline]
@@ -374,47 +373,51 @@ where
     }
 
     #[inline]
-    fn truncate(&mut self, len: usize) -> Result<()> {
+    fn truncate(&mut self, len: ReaderOffset) -> Result<()> {
         if self.len() < len {
             Err(Error::UnexpectedEof)
         } else {
+            let len = len as usize;
             self.range.truncate(len);
             Ok(())
         }
     }
 
     #[inline]
-    fn offset_from(&self, base: &EndianReader<Endian, T>) -> usize {
+    fn offset_from(&self, base: &EndianReader<Endian, T>) -> ReaderOffset {
         let base_ptr = base.bytes().as_ptr() as *const u8 as usize;
         let ptr = self.bytes().as_ptr() as *const u8 as usize;
         debug_assert!(base_ptr <= ptr);
         debug_assert!(ptr + self.bytes().len() <= base_ptr + base.bytes().len());
-        ptr - base_ptr
+        (ptr - base_ptr) as ReaderOffset
     }
 
     #[inline]
-    fn find(&self, byte: u8) -> Result<usize> {
+    fn find(&self, byte: u8) -> Result<ReaderOffset> {
         self.bytes()
             .iter()
             .position(|x| *x == byte)
+            .map(|x| x as ReaderOffset)
             .ok_or(Error::UnexpectedEof)
     }
 
     #[inline]
-    fn skip(&mut self, len: usize) -> Result<()> {
+    fn skip(&mut self, len: ReaderOffset) -> Result<()> {
         if self.len() < len {
             Err(Error::UnexpectedEof)
         } else {
+            let len = len as usize;
             self.range.skip(len);
             Ok(())
         }
     }
 
     #[inline]
-    fn split(&mut self, len: usize) -> Result<Self> {
+    fn split(&mut self, len: ReaderOffset) -> Result<Self> {
         if self.len() < len {
             Err(Error::UnexpectedEof)
         } else {
+            let len = len as usize;
             let mut r = self.clone();
             r.range.truncate(len);
             self.range.skip(len);
@@ -484,27 +487,27 @@ mod tests {
     #[test]
     fn bytes_and_len_and_range_and_eq() {
         let reader = native_reader(BUF);
-        assert_eq!(reader.len(), BUF.len());
+        assert_eq!(reader.len(), BUF.len() as u64);
         assert_eq!(reader.bytes(), BUF);
         assert_eq!(reader, native_reader(BUF));
 
         let range = reader.range(2..8);
         let buf_range = &BUF[2..8];
-        assert_eq!(range.len(), buf_range.len());
+        assert_eq!(range.len(), buf_range.len() as u64);
         assert_eq!(range.bytes(), buf_range);
         assert_ne!(range, native_reader(BUF));
         assert_eq!(range, native_reader(buf_range));
 
         let range_from = range.range_from(1..);
         let buf_range_from = &buf_range[1..];
-        assert_eq!(range_from.len(), buf_range_from.len());
+        assert_eq!(range_from.len(), buf_range_from.len() as u64);
         assert_eq!(range_from.bytes(), buf_range_from);
         assert_ne!(range_from, native_reader(BUF));
         assert_eq!(range_from, native_reader(buf_range_from));
 
         let range_to = range_from.range_to(..4);
         let buf_range_to = &buf_range_from[..4];
-        assert_eq!(range_to.len(), buf_range_to.len());
+        assert_eq!(range_to.len(), buf_range_to.len() as u64);
         assert_eq!(range_to.bytes(), buf_range_to);
         assert_ne!(range_to, native_reader(BUF));
         assert_eq!(range_to, native_reader(buf_range_to));
@@ -516,7 +519,7 @@ mod tests {
         reader.skip(2).unwrap();
         assert_eq!(
             reader.find(5),
-            Ok(BUF[2..].iter().position(|x| *x == 5).unwrap())
+            Ok(BUF[2..].iter().position(|x| *x == 5).unwrap() as u64)
         );
     }
 

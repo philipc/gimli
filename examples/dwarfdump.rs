@@ -148,7 +148,7 @@ where
     state.into_inner().unwrap().result
 }
 
-trait Reader: gimli::Reader<Offset = usize> + Send + Sync {
+trait Reader: gimli::Reader + Send + Sync {
     type SyncSendEndian: gimli::Endianity + Send + Sync;
 }
 
@@ -159,19 +159,14 @@ where
     type SyncSendEndian = Endian;
 }
 
-type RelocationMap = HashMap<usize, object::Relocation>;
+type RelocationMap = HashMap<gimli::ReaderOffset, object::Relocation>;
 
 fn add_relocations(
     relocations: &mut RelocationMap,
     file: &object::File,
     section: &object::Section,
 ) {
-    for (offset64, mut relocation) in section.relocations() {
-        let offset = offset64 as usize;
-        if offset as u64 != offset64 {
-            continue;
-        }
-        let offset = offset as usize;
+    for (offset, mut relocation) in section.relocations() {
         match relocation.kind() {
             object::RelocationKind::Direct32 | object::RelocationKind::Direct64 => {
                 if let Some(symbol) = file.symbol_by_index(relocation.symbol()) {
@@ -214,14 +209,14 @@ fn add_relocations(
 /// Cons
 /// - maybe incomplete
 #[derive(Debug, Clone)]
-struct Relocate<'a, R: gimli::Reader<Offset = usize>> {
+struct Relocate<'a, R: gimli::Reader> {
     relocations: &'a RelocationMap,
     section: R,
     reader: R,
 }
 
-impl<'a, R: gimli::Reader<Offset = usize>> Relocate<'a, R> {
-    fn relocate(&self, offset: usize, value: u64) -> u64 {
+impl<'a, R: gimli::Reader> Relocate<'a, R> {
+    fn relocate(&self, offset: gimli::ReaderOffset, value: u64) -> u64 {
         if let Some(relocation) = self.relocations.get(&offset) {
             match relocation.kind() {
                 object::RelocationKind::Direct32 | object::RelocationKind::Direct64 => {
@@ -239,9 +234,8 @@ impl<'a, R: gimli::Reader<Offset = usize>> Relocate<'a, R> {
     }
 }
 
-impl<'a, R: gimli::Reader<Offset = usize>> gimli::Reader for Relocate<'a, R> {
+impl<'a, R: gimli::Reader> gimli::Reader for Relocate<'a, R> {
     type Endian = R::Endian;
-    type Offset = R::Offset;
 
     fn read_address(&mut self, address_size: u8) -> gimli::Result<u64> {
         let offset = self.reader.offset_from(&self.section);
@@ -249,26 +243,26 @@ impl<'a, R: gimli::Reader<Offset = usize>> gimli::Reader for Relocate<'a, R> {
         Ok(self.relocate(offset, value))
     }
 
-    fn read_length(&mut self, format: gimli::Format) -> gimli::Result<usize> {
+    fn read_length(&mut self, format: gimli::Format) -> gimli::Result<gimli::ReaderOffset> {
         let offset = self.reader.offset_from(&self.section);
         let value = self.reader.read_length(format)?;
-        <usize as gimli::ReaderOffset>::from_u64(self.relocate(offset, value as u64))
+        Ok(self.relocate(offset, value))
     }
 
-    fn read_offset(&mut self, format: gimli::Format) -> gimli::Result<usize> {
+    fn read_offset(&mut self, format: gimli::Format) -> gimli::Result<gimli::ReaderOffset> {
         let offset = self.reader.offset_from(&self.section);
         let value = self.reader.read_offset(format)?;
-        <usize as gimli::ReaderOffset>::from_u64(self.relocate(offset, value as u64))
+        Ok(self.relocate(offset, value))
     }
 
-    fn read_sized_offset(&mut self, size: u8) -> gimli::Result<usize> {
+    fn read_sized_offset(&mut self, size: u8) -> gimli::Result<gimli::ReaderOffset> {
         let offset = self.reader.offset_from(&self.section);
         let value = self.reader.read_sized_offset(size)?;
-        <usize as gimli::ReaderOffset>::from_u64(self.relocate(offset, value as u64))
+        Ok(self.relocate(offset, value))
     }
 
     #[inline]
-    fn split(&mut self, len: Self::Offset) -> gimli::Result<Self> {
+    fn split(&mut self, len: gimli::ReaderOffset) -> gimli::Result<Self> {
         let mut other = self.clone();
         other.reader.truncate(len)?;
         self.reader.skip(len)?;
@@ -283,7 +277,7 @@ impl<'a, R: gimli::Reader<Offset = usize>> gimli::Reader for Relocate<'a, R> {
     }
 
     #[inline]
-    fn len(&self) -> Self::Offset {
+    fn len(&self) -> gimli::ReaderOffset {
         self.reader.len()
     }
 
@@ -293,22 +287,22 @@ impl<'a, R: gimli::Reader<Offset = usize>> gimli::Reader for Relocate<'a, R> {
     }
 
     #[inline]
-    fn truncate(&mut self, len: Self::Offset) -> gimli::Result<()> {
+    fn truncate(&mut self, len: gimli::ReaderOffset) -> gimli::Result<()> {
         self.reader.truncate(len)
     }
 
     #[inline]
-    fn offset_from(&self, base: &Self) -> Self::Offset {
+    fn offset_from(&self, base: &Self) -> gimli::ReaderOffset {
         self.reader.offset_from(&base.reader)
     }
 
     #[inline]
-    fn find(&self, byte: u8) -> gimli::Result<Self::Offset> {
+    fn find(&self, byte: u8) -> gimli::Result<gimli::ReaderOffset> {
         self.reader.find(byte)
     }
 
     #[inline]
-    fn skip(&mut self, len: Self::Offset) -> gimli::Result<()> {
+    fn skip(&mut self, len: gimli::ReaderOffset) -> gimli::Result<()> {
         self.reader.skip(len)
     }
 
@@ -888,51 +882,50 @@ fn dump_info<R: Reader>(
     writeln!(&mut BufWriter::new(out.lock()), "\n.debug_info")?;
 
     let units = debug_info.units().collect::<Vec<_>>().unwrap();
-    let process_unit =
-        |unit: CompilationUnitHeader<R, R::Offset>, buf: &mut Vec<u8>| -> Result<()> {
-            let abbrevs = match unit.abbreviations(debug_abbrev) {
-                Ok(abbrevs) => abbrevs,
-                Err(err) => {
-                    writeln!(
-                        buf,
-                        "Failed to parse abbreviations: {}",
-                        error::Error::description(&err)
-                    )?;
-                    return Ok(());
-                }
-            };
-
-            let entries_result = dump_entries(
-                buf,
-                unit.offset().0,
-                unit.entries(&abbrevs),
-                unit.address_size(),
-                unit.version(),
-                unit.format(),
-                debug_line,
-                debug_str,
-                loclists,
-                rnglists,
-                endian,
-                flags,
-            );
-            if let Err(err) = entries_result {
+    let process_unit = |unit: CompilationUnitHeader<R>, buf: &mut Vec<u8>| -> Result<()> {
+        let abbrevs = match unit.abbreviations(debug_abbrev) {
+            Ok(abbrevs) => abbrevs,
+            Err(err) => {
                 writeln!(
                     buf,
-                    "Failed to dump entries: {}",
+                    "Failed to parse abbreviations: {}",
                     error::Error::description(&err)
                 )?;
+                return Ok(());
             }
-            if !flags
-                .match_units
-                .as_ref()
-                .map(|r| r.is_match(&buf))
-                .unwrap_or(true)
-            {
-                buf.clear();
-            }
-            Ok(())
         };
+
+        let entries_result = dump_entries(
+            buf,
+            unit.offset().0,
+            unit.entries(&abbrevs),
+            unit.address_size(),
+            unit.version(),
+            unit.format(),
+            debug_line,
+            debug_str,
+            loclists,
+            rnglists,
+            endian,
+            flags,
+        );
+        if let Err(err) = entries_result {
+            writeln!(
+                buf,
+                "Failed to dump entries: {}",
+                error::Error::description(&err)
+            )?;
+        }
+        if !flags
+            .match_units
+            .as_ref()
+            .map(|r| r.is_match(&buf))
+            .unwrap_or(true)
+        {
+            buf.clear();
+        }
+        Ok(())
+    };
     // Don't use more than 16 cores even if available. No point in soaking hundreds
     // of cores if you happen to have them.
     parallel_output(16, units, process_unit)
@@ -1024,7 +1017,7 @@ fn spaces(buf: &mut String, len: usize) -> &str {
 #[allow(clippy::too_many_arguments)]
 fn dump_entries<R: Reader, W: Write>(
     w: &mut W,
-    offset: R::Offset,
+    offset: gimli::ReaderOffset,
     mut entries: gimli::EntriesCursor<R>,
     address_size: u8,
     version: u16,
@@ -1388,7 +1381,7 @@ fn dump_exprloc<R: Reader, W: Write>(
 fn dump_op<R: Reader, W: Write>(
     w: &mut W,
     dwop: gimli::DwOp,
-    op: gimli::Operation<R, R::Offset>,
+    op: gimli::Operation<R>,
     newpc: &R,
 ) -> Result<()> {
     write!(w, "{}", dwop)?;
@@ -1552,7 +1545,7 @@ fn dump_op<R: Reader, W: Write>(
 fn dump_loc_list<R: Reader, W: Write>(
     w: &mut W,
     loclists: &gimli::LocationLists<R>,
-    offset: gimli::LocationListsOffset<R::Offset>,
+    offset: gimli::LocationListsOffset,
     unit: &Unit<R>,
 ) -> Result<()> {
     let raw_locations = loclists.raw_locations(offset, unit.version, unit.address_size)?;
@@ -1636,7 +1629,7 @@ fn dump_loc_list<R: Reader, W: Write>(
 fn dump_range_list<R: Reader, W: Write>(
     w: &mut W,
     rnglists: &gimli::RangeLists<R>,
-    offset: gimli::RangeListsOffset<R::Offset>,
+    offset: gimli::RangeListsOffset,
     unit: &Unit<R>,
 ) -> Result<()> {
     let raw_ranges = rnglists.raw_ranges(offset, unit.version, unit.address_size)?;
@@ -1731,7 +1724,7 @@ fn dump_line<R: Reader, W: Write>(
 
 fn dump_line_program<R: Reader, W: Write>(
     w: &mut W,
-    unit: &CompilationUnitHeader<R, R::Offset>,
+    unit: &CompilationUnitHeader<R>,
     debug_line: &gimli::DebugLine<R>,
     debug_abbrev: &gimli::DebugAbbrev<R>,
     debug_str: &gimli::DebugStr<R>,

@@ -178,7 +178,7 @@ impl<R: Reader> LocationLists<R> {
     /// `FallibleIterator`](./index.html#using-with-fallibleiterator).
     pub fn locations(
         &self,
-        offset: LocationListsOffset<R::Offset>,
+        offset: LocationListsOffset,
         unit_version: u16,
         address_size: u8,
         base_address: u64,
@@ -201,7 +201,7 @@ impl<R: Reader> LocationLists<R> {
     /// `FallibleIterator`](./index.html#using-with-fallibleiterator).
     pub fn raw_locations(
         &self,
-        offset: LocationListsOffset<R::Offset>,
+        offset: LocationListsOffset,
         unit_version: u16,
         address_size: u8,
     ) -> Result<RawLocListIter<R>> {
@@ -210,7 +210,7 @@ impl<R: Reader> LocationLists<R> {
             input.skip(offset.0)?;
             Ok(RawLocListIter::new(input, unit_version, address_size))
         } else {
-            if offset.0 < R::Offset::from_u8(self.header.size()) {
+            if offset.0 < ReaderOffset::from(self.header.size()) {
                 return Err(Error::OffsetOutOfBounds);
             }
             let mut input = self.debug_loclists.debug_loclists_section.clone();
@@ -301,7 +301,7 @@ pub enum RawLocListEntry<R: Reader> {
 }
 
 fn parse_data<R: Reader>(input: &mut R) -> Result<Expression<R>> {
-    let len = R::Offset::from_u64(input.read_uleb128()?)?;
+    let len = input.read_uleb128()?;
     Ok(Expression(input.split(len)?))
 }
 
@@ -315,7 +315,7 @@ impl<R: Reader> RawLocListEntry<R> {
             } else if range.is_base_address(address_size) {
                 Some(RawLocListEntry::BaseAddress { addr: range.end })
             } else {
-                let len = R::Offset::from_u16(input.read_u16()?);
+                let len = ReaderOffset::from(input.read_u16()?);
                 let data = Expression(input.split(len)?);
                 Some(RawLocListEntry::OffsetPair {
                     begin: range.begin,
@@ -550,7 +550,7 @@ mod tests {
         let debug_loc = DebugLoc::new(&[], LittleEndian);
         let debug_loclists = DebugLocLists::new(&buf, LittleEndian);
         let loclists = LocationLists::new(debug_loc, debug_loclists).unwrap();
-        let offset = LocationListsOffset((&first - &start) as usize);
+        let offset = LocationListsOffset((&first - &start) as u64);
         let mut locations = loclists.locations(offset, 5, 0, 0x0100_0000).unwrap();
 
         // A normal location.
@@ -664,7 +664,7 @@ mod tests {
 
         // An offset at the end of buf.
         let mut locations = loclists
-            .locations(LocationListsOffset(buf.len()), 5, 0, 0x0100_0000)
+            .locations(LocationListsOffset(buf.len() as u64), 5, 0, 0x0100_0000)
             .unwrap();
         assert_eq!(locations.next(), Ok(None));
     }
@@ -714,7 +714,7 @@ mod tests {
         let debug_loc = DebugLoc::new(&[], LittleEndian);
         let debug_loclists = DebugLocLists::new(&buf, LittleEndian);
         let loclists = LocationLists::new(debug_loc, debug_loclists).unwrap();
-        let offset = LocationListsOffset((&first - &start) as usize);
+        let offset = LocationListsOffset((&first - &start) as u64);
         let mut locations = loclists.locations(offset, 5, 0, 0x0100_0000).unwrap();
 
         // A normal location.
@@ -828,7 +828,7 @@ mod tests {
 
         // An offset at the end of buf.
         let mut locations = loclists
-            .locations(LocationListsOffset(buf.len()), 5, 0, 0x0100_0000)
+            .locations(LocationListsOffset(buf.len() as u64), 5, 0, 0x0100_0000)
             .unwrap();
         assert_eq!(locations.next(), Ok(None));
     }
@@ -865,7 +865,7 @@ mod tests {
         let debug_loc = DebugLoc::new(&buf, LittleEndian);
         let debug_loclists = DebugLocLists::new(&[], LittleEndian);
         let loclists = LocationLists::new(debug_loc, debug_loclists).unwrap();
-        let offset = LocationListsOffset((&first - &start) as usize);
+        let offset = LocationListsOffset((&first - &start) as u64);
         let version = 4;
         let mut locations = loclists.locations(offset, version, 4, 0x0100_0000).unwrap();
 
@@ -944,7 +944,12 @@ mod tests {
 
         // An offset at the end of buf.
         let mut locations = loclists
-            .locations(LocationListsOffset(buf.len()), version, 4, 0x0100_0000)
+            .locations(
+                LocationListsOffset(buf.len() as u64),
+                version,
+                4,
+                0x0100_0000,
+            )
             .unwrap();
         assert_eq!(locations.next(), Ok(None));
     }
@@ -981,7 +986,7 @@ mod tests {
         let debug_loc = DebugLoc::new(&buf, LittleEndian);
         let debug_loclists = DebugLocLists::new(&[], LittleEndian);
         let loclists = LocationLists::new(debug_loc, debug_loclists).unwrap();
-        let offset = LocationListsOffset((&first - &start) as usize);
+        let offset = LocationListsOffset((&first - &start) as u64);
         let version = 4;
         let mut locations = loclists.locations(offset, version, 8, 0x0100_0000).unwrap();
 
@@ -1060,7 +1065,12 @@ mod tests {
 
         // An offset at the end of buf.
         let mut locations = loclists
-            .locations(LocationListsOffset(buf.len()), version, 8, 0x0100_0000)
+            .locations(
+                LocationListsOffset(buf.len() as u64),
+                version,
+                8,
+                0x0100_0000,
+            )
             .unwrap();
         assert_eq!(locations.next(), Ok(None));
     }
@@ -1093,7 +1103,12 @@ mod tests {
         assert_eq!(locations.next(), Err(Error::InvalidLocationAddressRange));
 
         // An invalid offset.
-        match loclists.locations(LocationListsOffset(buf.len() + 1), version, 4, 0x0100_0000) {
+        match loclists.locations(
+            LocationListsOffset(buf.len() as u64 + 1),
+            version,
+            4,
+            0x0100_0000,
+        ) {
             Err(Error::UnexpectedEof) => {}
             otherwise => panic!("Unexpected result: {:?}", otherwise),
         }

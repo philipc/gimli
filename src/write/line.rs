@@ -819,8 +819,8 @@ mod convert {
         /// Create a line number program by reading the data from the given program.
         ///
         /// Return the program and a mapping from file index to `FileId`.
-        pub fn from<R: Reader<Offset = usize>>(
-            mut from_program: read::IncompleteLineNumberProgram<R, R::Offset>,
+        pub fn from<R: Reader>(
+            mut from_program: read::IncompleteLineNumberProgram<R>,
             convert_address: &Fn(u64) -> Option<Address>,
         ) -> ConvertResult<(LineProgram, Vec<FileId>)> {
             // Create mappings in case the source has duplicate files or directories.

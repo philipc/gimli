@@ -44,10 +44,7 @@ impl<R: Reader> DebugAbbrev<R> {
     /// `.debug_abbrev` section.
     ///
     /// The `offset` should generally be retrieved from a unit header.
-    pub fn abbreviations(
-        &self,
-        debug_abbrev_offset: DebugAbbrevOffset<R::Offset>,
-    ) -> Result<Abbreviations> {
+    pub fn abbreviations(&self, debug_abbrev_offset: DebugAbbrevOffset) -> Result<Abbreviations> {
         let input = &mut self.debug_abbrev_section.clone();
         input.skip(debug_abbrev_offset.0)?;
         Abbreviations::parse(input)
@@ -301,7 +298,7 @@ impl AttributeSpecification {
     ///
     /// Note that because some attributes are variably sized, the size cannot
     /// always be known without parsing, in which case we return `None`.
-    pub fn size<R: Reader>(&self, header: &UnitHeader<R, R::Offset>) -> Option<usize> {
+    pub fn size<R: Reader>(&self, header: &UnitHeader<R>) -> Option<usize> {
         match self.form {
             constants::DW_FORM_addr => Some(header.address_size() as usize),
 
@@ -473,7 +470,7 @@ pub mod tests {
         );
 
         let debug_abbrev = DebugAbbrev::new(&buf, LittleEndian);
-        let debug_abbrev_offset = DebugAbbrevOffset(extra_start.len());
+        let debug_abbrev_offset = DebugAbbrevOffset(extra_start.len() as u64);
         let abbrevs = debug_abbrev
             .abbreviations(debug_abbrev_offset)
             .expect("Should parse abbreviations");

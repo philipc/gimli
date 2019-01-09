@@ -8,25 +8,25 @@ use read::lookup::{DebugLookup, LookupEntryIter, LookupParser};
 use read::{parse_debug_info_offset, EndianSlice, Error, Reader, ReaderOffset, Result, Section};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ArangeHeader<T = usize> {
+struct ArangeHeader {
     format: Format,
-    length: T,
+    length: ReaderOffset,
     version: u16,
-    offset: DebugInfoOffset<T>,
+    offset: DebugInfoOffset,
     address_size: u8,
     segment_size: u8,
 }
 
 /// A single parsed arange.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ArangeEntry<T: Copy = usize> {
+pub struct ArangeEntry {
     segment: Option<u64>,
     address: u64,
     length: u64,
-    unit_header_offset: DebugInfoOffset<T>,
+    unit_header_offset: DebugInfoOffset,
 }
 
-impl<T: Copy> ArangeEntry<T> {
+impl ArangeEntry {
     /// Return the segment selector of this arange.
     #[inline]
     pub fn segment(&self) -> Option<u64> {
@@ -47,19 +47,19 @@ impl<T: Copy> ArangeEntry<T> {
 
     /// Return the offset into the .debug_info section for this arange.
     #[inline]
-    pub fn debug_info_offset(&self) -> DebugInfoOffset<T> {
+    pub fn debug_info_offset(&self) -> DebugInfoOffset {
         self.unit_header_offset
     }
 }
 
-impl<T: Copy + Ord> PartialOrd for ArangeEntry<T> {
-    fn partial_cmp(&self, other: &ArangeEntry<T>) -> Option<Ordering> {
+impl PartialOrd for ArangeEntry {
+    fn partial_cmp(&self, other: &ArangeEntry) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<T: Copy + Ord> Ord for ArangeEntry<T> {
-    fn cmp(&self, other: &ArangeEntry<T>) -> Ordering {
+impl Ord for ArangeEntry {
+    fn cmp(&self, other: &ArangeEntry) -> Ordering {
         // The expected comparison, but ignore header.
         match (
             self.segment.cmp(&other.segment),
@@ -84,8 +84,8 @@ struct ArangeParser<R: Reader> {
 }
 
 impl<R: Reader> LookupParser<R> for ArangeParser<R> {
-    type Header = ArangeHeader<R::Offset>;
-    type Entry = ArangeEntry<R::Offset>;
+    type Header = ArangeHeader;
+    type Entry = ArangeEntry;
 
     /// Parse an arange set header. Returns a tuple of the aranges to be
     /// parsed for this set, and the newly created ArangeHeader struct.
@@ -114,7 +114,7 @@ impl<R: Reader> LookupParser<R> for ArangeParser<R> {
         } else {
             tuple_length - header_length % tuple_length
         };
-        rest.skip(R::Offset::from_u8(padding))?;
+        rest.skip(ReaderOffset::from(padding))?;
 
         Ok((
             rest,
@@ -134,7 +134,7 @@ impl<R: Reader> LookupParser<R> for ArangeParser<R> {
         let address_size = header.address_size;
         let segment_size = header.segment_size; // May be zero!
 
-        let tuple_length = R::Offset::from_u8(2 * address_size + segment_size);
+        let tuple_length = ReaderOffset::from(2 * address_size + segment_size);
         if tuple_length > input.len() {
             input.empty();
             return Ok(None);
@@ -242,13 +242,13 @@ impl<R: Reader> ArangeEntryIter<R> {
     /// when iteration is complete and all aranges have already been parsed and
     /// yielded. If an error occurs while parsing the next arange, then this error
     /// is returned as `Err(e)`, and all subsequent calls return `Ok(None)`.
-    pub fn next(&mut self) -> Result<Option<ArangeEntry<R::Offset>>> {
+    pub fn next(&mut self) -> Result<Option<ArangeEntry>> {
         self.0.next()
     }
 }
 
 impl<R: Reader> FallibleIterator for ArangeEntryIter<R> {
-    type Item = ArangeEntry<R::Offset>;
+    type Item = ArangeEntry;
     type Error = Error;
 
     fn next(&mut self) -> ::std::result::Result<Option<Self::Item>, Self::Error> {

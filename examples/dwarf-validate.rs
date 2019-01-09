@@ -22,7 +22,7 @@ use std::process;
 use std::sync::Mutex;
 use typed_arena::Arena;
 
-trait Reader: gimli::Reader<Offset = usize> + Send + Sync {
+trait Reader: gimli::Reader + Send + Sync {
     type SyncSendEndian: gimli::Endianity + Send + Sync;
 }
 
@@ -168,7 +168,7 @@ fn validate_info<W, R>(
         last_offset = u.offset().0 + u.length_including_self();
         units.push(u);
     }
-    let process_unit = |unit: CompilationUnitHeader<R, R::Offset>| -> UnitSummary {
+    let process_unit = |unit: CompilationUnitHeader<R>| -> UnitSummary {
         let mut ret = UnitSummary {
             internally_valid: false,
             offset: unit.offset(),

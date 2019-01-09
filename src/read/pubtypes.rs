@@ -8,8 +8,8 @@ use read::{EndianSlice, Error, Reader, Result, Section, UnitOffset};
 /// A single parsed pubtype.
 #[derive(Debug, Clone)]
 pub struct PubTypesEntry<R: Reader> {
-    unit_header_offset: DebugInfoOffset<R::Offset>,
-    die_offset: UnitOffset<R::Offset>,
+    unit_header_offset: DebugInfoOffset,
+    die_offset: UnitOffset,
     name: R,
 }
 
@@ -21,23 +21,19 @@ impl<R: Reader> PubTypesEntry<R> {
 
     /// Returns the offset into the .debug_info section for the header of the compilation unit
     /// which contains the type with this name.
-    pub fn unit_header_offset(&self) -> DebugInfoOffset<R::Offset> {
+    pub fn unit_header_offset(&self) -> DebugInfoOffset {
         self.unit_header_offset
     }
 
     /// Returns the offset into the compilation unit for the debugging information entry which
     /// the type with this name.
-    pub fn die_offset(&self) -> UnitOffset<R::Offset> {
+    pub fn die_offset(&self) -> UnitOffset {
         self.die_offset
     }
 }
 
 impl<R: Reader> PubStuffEntry<R> for PubTypesEntry<R> {
-    fn new(
-        die_offset: UnitOffset<R::Offset>,
-        name: R,
-        unit_header_offset: DebugInfoOffset<R::Offset>,
-    ) -> Self {
+    fn new(die_offset: UnitOffset, name: R, unit_header_offset: DebugInfoOffset) -> Self {
         PubTypesEntry {
             unit_header_offset,
             die_offset,

@@ -122,20 +122,16 @@ where
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PubStuffHeader<T = usize> {
+pub struct PubStuffHeader {
     format: Format,
-    length: T,
+    length: ReaderOffset,
     version: u16,
-    unit_offset: DebugInfoOffset<T>,
-    unit_length: T,
+    unit_offset: DebugInfoOffset,
+    unit_length: ReaderOffset,
 }
 
 pub trait PubStuffEntry<R: Reader> {
-    fn new(
-        die_offset: UnitOffset<R::Offset>,
-        name: R,
-        unit_header_offset: DebugInfoOffset<R::Offset>,
-    ) -> Self;
+    fn new(die_offset: UnitOffset, name: R, unit_header_offset: DebugInfoOffset) -> Self;
 }
 
 #[derive(Clone, Debug)]
@@ -153,7 +149,7 @@ where
     R: Reader,
     Entry: PubStuffEntry<R>,
 {
-    type Header = PubStuffHeader<R::Offset>;
+    type Header = PubStuffHeader;
     type Entry = Entry;
 
     /// Parse an pubthings set header. Returns a tuple of the
@@ -183,7 +179,7 @@ where
     /// Parse a single pubthing. Return `None` for the null pubthing, `Some` for an actual pubthing.
     fn parse_entry(input: &mut R, header: &Self::Header) -> Result<Option<Self::Entry>> {
         let offset = input.read_offset(header.format)?;
-        if offset.into_u64() == 0 {
+        if offset == 0 {
             input.empty();
             Ok(None)
         } else {

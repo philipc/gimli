@@ -1,7 +1,11 @@
+use common::Offset;
 use endianity::Endianity;
 use leb128;
 use write::{Address, Error, Result, SectionId};
 use Format;
+
+/// The type used for offsets and lengths in the `Writer` trait.
+pub type WriterOffset = Offset;
 
 /// A trait for writing the data to a DWARF section.
 ///
@@ -17,7 +21,7 @@ pub trait Writer {
     /// Return the current section length.
     ///
     /// This may be used as an offset for future `write_at` calls.
-    fn len(&self) -> usize;
+    fn len(&self) -> WriterOffset;
 
     /// Write a slice.
     fn write(&mut self, bytes: &[u8]) -> Result<()>;
@@ -25,7 +29,7 @@ pub trait Writer {
     /// Write a slice at a given offset.
     ///
     /// The write must not extend past the current section length.
-    fn write_at(&mut self, offset: usize, bytes: &[u8]) -> Result<()>;
+    fn write_at(&mut self, at: WriterOffset, bytes: &[u8]) -> Result<()>;
 
     /// Write an address that is relative to the given symbol.
     ///
@@ -42,7 +46,7 @@ pub trait Writer {
     ///
     /// If the writer supports relocations, then it must provide its own implementation
     /// of this method.
-    fn write_offset(&mut self, val: usize, _section: SectionId, size: u8) -> Result<()> {
+    fn write_offset(&mut self, val: WriterOffset, _section: SectionId, size: u8) -> Result<()> {
         self.write_word(val as u64, size)
     }
 
@@ -52,12 +56,12 @@ pub trait Writer {
     /// of this method.
     fn write_offset_at(
         &mut self,
-        offset: usize,
-        val: usize,
+        at: WriterOffset,
+        val: WriterOffset,
         _section: SectionId,
         size: u8,
     ) -> Result<()> {
-        self.write_word_at(offset, val as u64, size)
+        self.write_word_at(at, val as u64, size)
     }
 
     /// Write a u8.
@@ -88,30 +92,30 @@ pub trait Writer {
     }
 
     /// Write a u8 at the given offset.
-    fn write_u8_at(&mut self, offset: usize, val: u8) -> Result<()> {
+    fn write_u8_at(&mut self, at: WriterOffset, val: u8) -> Result<()> {
         let bytes = [val];
-        self.write_at(offset, &bytes)
+        self.write_at(at, &bytes)
     }
 
     /// Write a u16 at the given offset.
-    fn write_u16_at(&mut self, offset: usize, val: u16) -> Result<()> {
+    fn write_u16_at(&mut self, at: WriterOffset, val: u16) -> Result<()> {
         let mut bytes = [0; 2];
         self.endian().write_u16(&mut bytes, val);
-        self.write_at(offset, &bytes)
+        self.write_at(at, &bytes)
     }
 
     /// Write a u32 at the given offset.
-    fn write_u32_at(&mut self, offset: usize, val: u32) -> Result<()> {
+    fn write_u32_at(&mut self, at: WriterOffset, val: u32) -> Result<()> {
         let mut bytes = [0; 4];
         self.endian().write_u32(&mut bytes, val);
-        self.write_at(offset, &bytes)
+        self.write_at(at, &bytes)
     }
 
     /// Write a u64 at the given offset.
-    fn write_u64_at(&mut self, offset: usize, val: u64) -> Result<()> {
+    fn write_u64_at(&mut self, at: WriterOffset, val: u64) -> Result<()> {
         let mut bytes = [0; 8];
         self.endian().write_u64(&mut bytes, val);
-        self.write_at(offset, &bytes)
+        self.write_at(at, &bytes)
     }
 
     /// Write a word of the given size.
@@ -150,30 +154,30 @@ pub trait Writer {
     ///
     /// Returns an error if the value is too large for the size.
     /// This must not be used directly for values that may require relocation.
-    fn write_word_at(&mut self, offset: usize, val: u64, size: u8) -> Result<()> {
+    fn write_word_at(&mut self, at: WriterOffset, val: u64, size: u8) -> Result<()> {
         match size {
             1 => {
                 let write_val = val as u8;
                 if val != u64::from(write_val) {
                     return Err(Error::ValueTooLarge);
                 }
-                self.write_u8_at(offset, write_val)
+                self.write_u8_at(at, write_val)
             }
             2 => {
                 let write_val = val as u16;
                 if val != u64::from(write_val) {
                     return Err(Error::ValueTooLarge);
                 }
-                self.write_u16_at(offset, write_val)
+                self.write_u16_at(at, write_val)
             }
             4 => {
                 let write_val = val as u32;
                 if val != u64::from(write_val) {
                     return Err(Error::ValueTooLarge);
                 }
-                self.write_u32_at(offset, write_val)
+                self.write_u32_at(at, write_val)
             }
-            8 => self.write_u64_at(offset, val),
+            8 => self.write_u64_at(at, val),
             otherwise => Err(Error::UnsupportedWordSize(otherwise)),
         }
     }
@@ -213,17 +217,17 @@ pub trait Writer {
     /// `write_initial_length` must have previously returned the offset.
     fn write_initial_length_at(
         &mut self,
-        offset: InitialLengthOffset,
+        at: InitialLengthOffset,
         length: u64,
         format: Format,
     ) -> Result<()> {
-        self.write_word_at(offset.0, length, format.word_size())
+        self.write_word_at(at.0, length, format.word_size())
     }
 }
 
 /// The offset at which an initial length should be written.
 #[derive(Debug, Clone, Copy)]
-pub struct InitialLengthOffset(usize);
+pub struct InitialLengthOffset(WriterOffset);
 
 #[cfg(test)]
 mod tests {

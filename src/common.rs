@@ -34,62 +34,65 @@ impl Format {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Register(pub u16);
 
+/// An offset or length in an unspecified section.
+pub(crate) type Offset = u64;
+
 /// An offset into the `.debug_abbrev` section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct DebugAbbrevOffset<T = usize>(pub T);
+pub struct DebugAbbrevOffset(pub Offset);
 
 /// An offset into the `.debug_info` section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Ord, PartialOrd, Hash)]
-pub struct DebugInfoOffset<T = usize>(pub T);
+pub struct DebugInfoOffset(pub Offset);
 
 /// An offset into the `.debug_line` section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DebugLineOffset<T = usize>(pub T);
+pub struct DebugLineOffset(pub Offset);
 
 /// An offset into either the `.debug_loc` section or the `.debug_loclists` section,
 /// depending on the version of the unit the offset was contained in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct LocationListsOffset<T = usize>(pub T);
+pub struct LocationListsOffset(pub Offset);
 
 /// An offset into the `.debug_macinfo` section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct DebugMacinfoOffset<T = usize>(pub T);
+pub struct DebugMacinfoOffset(pub Offset);
 
 /// An offset into either the `.debug_ranges` section or the `.debug_rnglists` section,
 /// depending on the version of the unit the offset was contained in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct RangeListsOffset<T = usize>(pub T);
+pub struct RangeListsOffset(pub Offset);
 
 /// An offset into the `.debug_str` section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct DebugStrOffset<T = usize>(pub T);
+pub struct DebugStrOffset(pub Offset);
 
 /// An offset into the `.debug_types` section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct DebugTypesOffset<T = usize>(pub T);
+pub struct DebugTypesOffset(pub Offset);
 
 /// A type signature as used in the `.debug_types` section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct DebugTypeSignature(pub u64);
+pub struct DebugTypeSignature(pub Offset);
 
 /// An offset into the `.debug_frame` section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct DebugFrameOffset<T = usize>(pub T);
+pub struct DebugFrameOffset(pub Offset);
 
-impl<T> From<T> for DebugFrameOffset<T> {
+impl From<u64> for DebugFrameOffset {
     #[inline]
-    fn from(o: T) -> Self {
+    fn from(o: u64) -> Self {
         DebugFrameOffset(o)
     }
 }
 
 /// An offset into the `.eh_frame` section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct EhFrameOffset<T = usize>(pub T);
+pub struct EhFrameOffset(pub u64);
 
-impl<T> From<T> for EhFrameOffset<T> {
+impl From<u64> for EhFrameOffset {
     #[inline]
-    fn from(o: T) -> Self {
+    fn from(o: u64) -> Self {
         EhFrameOffset(o)
     }
 }

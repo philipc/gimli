@@ -491,7 +491,7 @@ pub(crate) fn parse_encoded_pointer<'bases, R: Reader>(
                 let offset_from_section = input.offset_from(section);
                 let offset = parse_data(encoding, address_size, input)?;
                 let p = section_base
-                    .wrapping_add(offset_from_section.into_u64())
+                    .wrapping_add(offset_from_section)
                     .wrapping_add(offset);
                 Ok(Pointer::new(encoding, p))
             } else {

@@ -7,7 +7,7 @@ use std::str;
 use string::String;
 
 use endianity::Endianity;
-use read::{Error, Reader, Result};
+use read::{Error, Reader, ReaderOffset, Result};
 
 /// A `&[u8]` slice with endianity metadata.
 ///
@@ -65,12 +65,12 @@ where
     /// Return the offset of the start of the slice relative to the start
     /// of the given slice.
     #[inline]
-    pub fn offset_from(&self, base: EndianSlice<'input, Endian>) -> usize {
+    pub fn offset_from(&self, base: EndianSlice<'input, Endian>) -> ReaderOffset {
         let base_ptr = base.slice.as_ptr() as *const u8 as usize;
         let ptr = self.slice.as_ptr() as *const u8 as usize;
         debug_assert!(base_ptr <= ptr);
         debug_assert!(ptr + self.slice.len() <= base_ptr + base.slice.len());
-        ptr - base_ptr
+        (ptr - base_ptr) as ReaderOffset
     }
 
     /// Converts the slice to a string using `str::from_utf8`.
@@ -89,10 +89,11 @@ where
     }
 
     #[inline]
-    fn read_slice(&mut self, len: usize) -> Result<&'input [u8]> {
-        if self.slice.len() < len {
+    fn read_slice(&mut self, len: ReaderOffset) -> Result<&'input [u8]> {
+        if self.len() < len {
             Err(Error::UnexpectedEof)
         } else {
+            let len = len as usize;
             let val = &self.slice[..len];
             self.slice = &self.slice[len..];
             Ok(val)
@@ -209,7 +210,6 @@ where
     Endian: Endianity,
 {
     type Endian = Endian;
-    type Offset = usize;
 
     #[inline]
     fn endian(&self) -> Endian {
@@ -217,8 +217,8 @@ where
     }
 
     #[inline]
-    fn len(&self) -> usize {
-        self.slice.len()
+    fn len(&self) -> ReaderOffset {
+        self.slice.len() as ReaderOffset
     }
 
     #[inline]
@@ -232,37 +232,41 @@ where
     }
 
     #[inline]
-    fn truncate(&mut self, len: usize) -> Result<()> {
-        if self.slice.len() < len {
+    fn truncate(&mut self, len: ReaderOffset) -> Result<()> {
+        if self.len() < len {
             Err(Error::UnexpectedEof)
         } else {
+            let len = len as usize;
             self.slice = &self.slice[..len];
             Ok(())
         }
     }
 
     #[inline]
-    fn offset_from(&self, base: &Self) -> usize {
+    fn offset_from(&self, base: &Self) -> ReaderOffset {
         self.offset_from(*base)
     }
 
     #[inline]
-    fn find(&self, byte: u8) -> Result<usize> {
-        self.find(byte).ok_or(Error::UnexpectedEof)
+    fn find(&self, byte: u8) -> Result<ReaderOffset> {
+        self.find(byte)
+            .map(|x| x as ReaderOffset)
+            .ok_or(Error::UnexpectedEof)
     }
 
     #[inline]
-    fn skip(&mut self, len: usize) -> Result<()> {
-        if self.slice.len() < len {
+    fn skip(&mut self, len: ReaderOffset) -> Result<()> {
+        if self.len() < len {
             Err(Error::UnexpectedEof)
         } else {
+            let len = len as usize;
             self.slice = &self.slice[len..];
             Ok(())
         }
     }
 
     #[inline]
-    fn split(&mut self, len: usize) -> Result<Self> {
+    fn split(&mut self, len: ReaderOffset) -> Result<Self> {
         let slice = self.read_slice(len)?;
         Ok(EndianSlice::new(slice, self.endian))
     }
@@ -290,7 +294,7 @@ where
     where
         A: Sized + Default + AsMut<[u8]>,
     {
-        let len = mem::size_of::<A>();
+        let len = mem::size_of::<A>() as ReaderOffset;
         let slice = self.read_slice(len)?;
         let mut val = Default::default();
         <A as AsMut<[u8]>>::as_mut(&mut val).clone_from_slice(slice);

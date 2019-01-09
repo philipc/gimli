@@ -10,11 +10,11 @@ use read::{Error, Reader, ReaderOffset, Result, UnitOffset, Value, ValueType};
 /// A reference to a DIE, either relative to the current CU or
 /// relative to the section.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DieReference<T = usize> {
+pub enum DieReference {
     /// A CU-relative reference.
-    UnitRef(UnitOffset<T>),
+    UnitRef(UnitOffset),
     /// A section-relative reference.
-    DebugInfoRef(DebugInfoOffset<T>),
+    DebugInfoRef(DebugInfoOffset),
 }
 
 /// A single decoded DWARF expression operation.
@@ -29,15 +29,11 @@ pub enum DieReference<T = usize> {
 /// example, both `DW_OP_deref` and `DW_OP_xderef` are represented
 /// using `Operation::Deref`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Operation<R, Offset = usize>
-where
-    R: Reader<Offset = Offset>,
-    Offset: ReaderOffset,
-{
+pub enum Operation<R: Reader> {
     /// Dereference the topmost value of the stack.
     Deref {
         /// The DIE of the base type or 0 to indicate the generic type
-        base_type: UnitOffset<Offset>,
+        base_type: UnitOffset,
         /// The size of the data to dereference.
         size: u8,
         /// True if the dereference operation takes an address space
@@ -135,7 +131,7 @@ where
         /// The offset to add.
         offset: i64,
         /// The DIE of the base type or 0 to indicate the generic type
-        base_type: UnitOffset<Offset>,
+        base_type: UnitOffset,
     },
     /// Compute the frame base (using `DW_AT_frame_base`), add the
     /// given offset, and then push the resulting sum on the stack.
@@ -152,7 +148,7 @@ where
     /// DIE.
     Call {
         /// The DIE to use.
-        offset: DieReference<Offset>,
+        offset: DieReference,
     },
     /// Compute the address of a thread-local variable and push it on
     /// the stack.
@@ -185,7 +181,7 @@ where
     /// Completes the piece or expression.
     ImplicitPointer {
         /// The `.debug_info` offset of the value that this is an implicit pointer into.
-        value: DebugInfoOffset<Offset>,
+        value: DebugInfoOffset,
         /// The byte offset into the value that the implicit pointer points to.
         byte_offset: i64,
     },
@@ -201,7 +197,7 @@ where
     /// points to the same definition of the parameter.
     ParameterRef {
         /// The DIE to use.
-        offset: UnitOffset<Offset>,
+        offset: UnitOffset,
     },
     /// Represents `DW_OP_addr`.
     /// Relocate the address if needed, and push it on the stack.
@@ -213,7 +209,7 @@ where
     /// Interpret the value bytes as a constant of a given type, and push it on the stack.
     TypedLiteral {
         /// The DIE of the base type.
-        base_type: UnitOffset<Offset>,
+        base_type: UnitOffset,
         /// The value bytes.
         value: R,
     },
@@ -221,14 +217,14 @@ where
     /// Pop the top stack entry, convert it to a different type, and push it on the stack.
     Convert {
         /// The DIE of the base type.
-        base_type: UnitOffset<Offset>,
+        base_type: UnitOffset,
     },
     /// Represents `DW_OP_reinterpret`.
     /// Pop the top stack entry, reinterpret the bits in its value as a different type,
     /// and push it on the stack.
     Reinterpret {
         /// The DIE of the base type.
-        base_type: UnitOffset<Offset>,
+        base_type: UnitOffset,
     },
 }
 
@@ -236,17 +232,13 @@ where
 enum OperationEvaluationResult<R: Reader> {
     Piece,
     Incomplete,
-    Complete { location: Location<R, R::Offset> },
+    Complete { location: Location<R> },
     Waiting(EvaluationWaiting<R>, EvaluationResult<R>),
 }
 
 /// A single location of a piece of the result of a DWARF expression.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Location<R, Offset = usize>
-where
-    R: Reader<Offset = Offset>,
-    Offset: ReaderOffset,
-{
+pub enum Location<R: Reader> {
     /// The piece is empty.  Ordinarily this means the piece has been
     /// optimized away.
     Empty,
@@ -273,17 +265,13 @@ where
     /// The piece is a pointer to a value which has no actual location.
     ImplicitPointer {
         /// The `.debug_info` offset of the value that this is an implicit pointer into.
-        value: DebugInfoOffset<Offset>,
+        value: DebugInfoOffset,
         /// The byte offset into the value that the implicit pointer points to.
         byte_offset: i64,
     },
 }
 
-impl<R, Offset> Location<R, Offset>
-where
-    R: Reader<Offset = Offset>,
-    Offset: ReaderOffset,
-{
+impl<R: Reader> Location<R> {
     /// Return true if the piece is empty.
     pub fn is_empty(&self) -> bool {
         match *self {
@@ -296,11 +284,7 @@ where
 /// The description of a single piece of the result of a DWARF
 /// expression.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct Piece<R, Offset = usize>
-where
-    R: Reader<Offset = Offset>,
-    Offset: ReaderOffset,
-{
+pub struct Piece<R: Reader> {
     /// If given, the size of the piece in bits.  If `None`, there
     /// must be only one piece whose size is all of the object.
     pub size_in_bits: Option<u64>,
@@ -317,15 +301,15 @@ where
     /// then placement within the register is defined by the ABI.
     pub bit_offset: Option<u64>,
     /// Where this piece is to be found.
-    pub location: Location<R, Offset>,
+    pub location: Location<R>,
 }
 
 // A helper function to handle branch offsets.
 fn compute_pc<R: Reader>(pc: &R, bytecode: &R, offset: i16) -> Result<R> {
     let pc_offset = pc.offset_from(bytecode);
-    let new_pc_offset = pc_offset.wrapping_add(R::Offset::from_i16(offset));
+    let new_pc_offset = pc_offset.wrapping_add(offset as u64);
     if new_pc_offset > bytecode.len() {
-        Err(Error::BadBranchTarget(new_pc_offset.into_u64()))
+        Err(Error::BadBranchTarget(new_pc_offset))
     } else {
         let mut new_pc = bytecode.clone();
         new_pc.skip(new_pc_offset)?;
@@ -333,15 +317,11 @@ fn compute_pc<R: Reader>(pc: &R, bytecode: &R, offset: i16) -> Result<R> {
     }
 }
 
-fn generic_type<O: ReaderOffset>() -> UnitOffset<O> {
-    UnitOffset(O::from_u64(0).unwrap())
+fn generic_type() -> UnitOffset {
+    UnitOffset(0)
 }
 
-impl<R, Offset> Operation<R, Offset>
-where
-    R: Reader<Offset = Offset>,
-    Offset: ReaderOffset,
-{
+impl<R: Reader> Operation<R> {
     /// Parse a single DWARF expression operation.
     ///
     /// This is useful when examining a DWARF expression for reasons other
@@ -355,7 +335,7 @@ where
         bytecode: &R,
         address_size: u8,
         format: Format,
-    ) -> Result<Operation<R, Offset>> {
+    ) -> Result<Operation<R>> {
         let opcode = bytes.read_u8()?;
         let name = constants::DwOp(opcode);
         match name {
@@ -624,13 +604,13 @@ where
             constants::DW_OP_nop => Ok(Operation::Nop),
             constants::DW_OP_push_object_address => Ok(Operation::PushObjectAddress),
             constants::DW_OP_call2 => {
-                let value = bytes.read_u16().map(R::Offset::from_u16)?;
+                let value = bytes.read_u16().map(ReaderOffset::from)?;
                 Ok(Operation::Call {
                     offset: DieReference::UnitRef(UnitOffset(value)),
                 })
             }
             constants::DW_OP_call4 => {
-                let value = bytes.read_u32().map(R::Offset::from_u32)?;
+                let value = bytes.read_u32().map(ReaderOffset::from)?;
                 Ok(Operation::Call {
                     offset: DieReference::UnitRef(UnitOffset(value)),
                 })
@@ -654,7 +634,7 @@ where
                 })
             }
             constants::DW_OP_implicit_value => {
-                let len = bytes.read_uleb128().and_then(R::Offset::from_u64)?;
+                let len = bytes.read_uleb128()?;
                 let data = bytes.split(len)?;
                 Ok(Operation::ImplicitValue { data })
             }
@@ -668,20 +648,20 @@ where
                 })
             }
             constants::DW_OP_entry_value | constants::DW_OP_GNU_entry_value => {
-                let len = bytes.read_uleb128().and_then(R::Offset::from_u64)?;
+                let len = bytes.read_uleb128()?;
                 let expression = bytes.split(len)?;
                 Ok(Operation::EntryValue { expression })
             }
             constants::DW_OP_GNU_parameter_ref => {
-                let value = bytes.read_u32().map(R::Offset::from_u32)?;
+                let value = bytes.read_u32().map(ReaderOffset::from)?;
                 Ok(Operation::ParameterRef {
                     offset: UnitOffset(value),
                 })
             }
             constants::DW_OP_const_type | constants::DW_OP_GNU_const_type => {
-                let base_type = bytes.read_uleb128().and_then(R::Offset::from_u64)?;
+                let base_type = bytes.read_uleb128()?;
                 let len = bytes.read_u8()?;
-                let value = bytes.split(R::Offset::from_u8(len))?;
+                let value = bytes.split(ReaderOffset::from(len))?;
                 Ok(Operation::TypedLiteral {
                     base_type: UnitOffset(base_type),
                     value,
@@ -689,7 +669,7 @@ where
             }
             constants::DW_OP_regval_type | constants::DW_OP_GNU_regval_type => {
                 let register = bytes.read_uleb128().and_then(Register::from_u64)?;
-                let base_type = bytes.read_uleb128().and_then(R::Offset::from_u64)?;
+                let base_type = bytes.read_uleb128()?;
                 Ok(Operation::RegisterOffset {
                     register,
                     offset: 0,
@@ -698,7 +678,7 @@ where
             }
             constants::DW_OP_deref_type | constants::DW_OP_GNU_deref_type => {
                 let size = bytes.read_u8()?;
-                let base_type = bytes.read_uleb128().and_then(R::Offset::from_u64)?;
+                let base_type = bytes.read_uleb128()?;
                 Ok(Operation::Deref {
                     base_type: UnitOffset(base_type),
                     size,
@@ -707,7 +687,7 @@ where
             }
             constants::DW_OP_xderef_type => {
                 let size = bytes.read_u8()?;
-                let base_type = bytes.read_uleb128().and_then(R::Offset::from_u64)?;
+                let base_type = bytes.read_uleb128()?;
                 Ok(Operation::Deref {
                     base_type: UnitOffset(base_type),
                     size,
@@ -715,13 +695,13 @@ where
                 })
             }
             constants::DW_OP_convert | constants::DW_OP_GNU_convert => {
-                let base_type = bytes.read_uleb128().and_then(R::Offset::from_u64)?;
+                let base_type = bytes.read_uleb128()?;
                 Ok(Operation::Convert {
                     base_type: UnitOffset(base_type),
                 })
             }
             constants::DW_OP_reinterpret | constants::DW_OP_GNU_reinterpret => {
-                let base_type = bytes.read_uleb128().and_then(R::Offset::from_u64)?;
+                let base_type = bytes.read_uleb128()?;
                 Ok(Operation::Reinterpret {
                     base_type: UnitOffset(base_type),
                 })
@@ -776,7 +756,7 @@ pub enum EvaluationResult<R: Reader> {
         /// If not `None`, a target-specific address space value.
         space: Option<u64>,
         /// The DIE of the base type or 0 to indicate the generic type
-        base_type: UnitOffset<R::Offset>,
+        base_type: UnitOffset,
     },
     /// The `Evaluation` needs a value from a register to proceed further.  Once
     /// the caller determines what value to provide it should resume the
@@ -785,7 +765,7 @@ pub enum EvaluationResult<R: Reader> {
         /// The register number.
         register: Register,
         /// The DIE of the base type or 0 to indicate the generic type
-        base_type: UnitOffset<R::Offset>,
+        base_type: UnitOffset,
     },
     /// The `Evaluation` needs the frame base address to proceed further.  Once
     /// the caller determines what value to provide it should resume the
@@ -805,7 +785,7 @@ pub enum EvaluationResult<R: Reader> {
     /// proceed further.  Once the caller determines what value to provide it
     /// should resume the `Evaluation` by calling
     /// `Evaluation::resume_with_at_location`.
-    RequiresAtLocation(DieReference<R::Offset>),
+    RequiresAtLocation(DieReference),
     /// The `Evaluation` needs the value produced by evaluating a DWARF
     /// expression at the entry point of the current subprogram.  Once the
     /// caller determines what value to provide it should resume the
@@ -815,7 +795,7 @@ pub enum EvaluationResult<R: Reader> {
     /// in the current function's caller.  Once the caller determines what value
     /// to provide it should resume the `Evaluation` by calling
     /// `Evaluation::resume_with_parameter_ref`.
-    RequiresParameterRef(UnitOffset<R::Offset>),
+    RequiresParameterRef(UnitOffset),
     /// The `Evaluation` needs an address to be relocated to proceed further.
     /// Once the caller determines what value to provide it should resume the
     /// `Evaluation` by calling `Evaluation::resume_with_relocated_address`.
@@ -824,7 +804,7 @@ pub enum EvaluationResult<R: Reader> {
     /// the give unit offset.  Once the caller determines what value to provide it
     /// should resume the `Evaluation` by calling
     /// `Evaluation::resume_with_base_type`.
-    RequiresBaseType(UnitOffset<R::Offset>),
+    RequiresBaseType(UnitOffset),
 }
 
 /// The bytecode for a DWARF expression or location description.
@@ -927,7 +907,7 @@ pub struct Evaluation<R: Reader> {
     // is stored here while evaluating the subroutine.
     expression_stack: Vec<(R, R)>,
 
-    result: Vec<Piece<R, R::Offset>>,
+    result: Vec<Piece<R>>,
 }
 
 impl<R: Reader> Evaluation<R> {
@@ -1353,7 +1333,7 @@ impl<R: Reader> Evaluation<R> {
     ///
     /// # Panics
     /// Panics if this `Evaluation` has not been driven to completion.
-    pub fn result(self) -> Vec<Piece<R, R::Offset>> {
+    pub fn result(self) -> Vec<Piece<R>> {
         match self.state {
             EvaluationState::Complete => self.result,
             _ => {
@@ -1685,8 +1665,7 @@ impl<R: Reader> Evaluation<R> {
                                 });
                             }
                             _ => {
-                                let value =
-                                    self.bytecode.len().into_u64() - self.pc.len().into_u64() - 1;
+                                let value = self.bytecode.len() - self.pc.len() - 1;
                                 return Err(Error::InvalidExpressionTerminator(value));
                             }
                         }
@@ -3839,7 +3818,7 @@ mod tests {
                                     v += value;
                                 }
                                 v &= (1u64 << (8 * size)) - 1;
-                                let v = Value::from_u64(base_types[base_type.0], v)?;
+                                let v = Value::from_u64(base_types[base_type.0 as usize], v)?;
                                 eval.resume_with_memory(v)?
                             }
                             EvaluationResult::RequiresRegister {
@@ -3847,13 +3826,13 @@ mod tests {
                                 base_type,
                             } => {
                                 let v = Value::from_u64(
-                                    base_types[base_type.0],
+                                    base_types[base_type.0 as usize],
                                     u64::from(register.0) << 4,
                                 )?;
                                 eval.resume_with_register(v)?
                             }
                             EvaluationResult::RequiresBaseType(offset) => {
-                                eval.resume_with_base_type(base_types[offset.0])?
+                                eval.resume_with_base_type(base_types[offset.0 as usize])?
                             }
                             EvaluationResult::RequiresRelocatedAddress(address) => {
                                 eval.resume_with_relocated_address(address)?

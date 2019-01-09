@@ -181,7 +181,7 @@ impl<R: Reader> RangeLists<R> {
     /// `FallibleIterator`](./index.html#using-with-fallibleiterator).
     pub fn ranges(
         &self,
-        offset: RangeListsOffset<R::Offset>,
+        offset: RangeListsOffset,
         unit_version: u16,
         address_size: u8,
         base_address: u64,
@@ -204,7 +204,7 @@ impl<R: Reader> RangeLists<R> {
     /// `FallibleIterator`](./index.html#using-with-fallibleiterator).
     pub fn raw_ranges(
         &self,
-        offset: RangeListsOffset<R::Offset>,
+        offset: RangeListsOffset,
         unit_version: u16,
         address_size: u8,
     ) -> Result<RawRngListIter<R>> {
@@ -213,7 +213,7 @@ impl<R: Reader> RangeLists<R> {
             input.skip(offset.0)?;
             Ok(RawRngListIter::new(input, unit_version, address_size))
         } else {
-            if offset.0 < R::Offset::from_u8(self.header.size()) {
+            if offset.0 < ReaderOffset::from(self.header.size()) {
                 return Err(Error::OffsetOutOfBounds);
             }
             let mut input = self.debug_rnglists.debug_rnglists_section.clone();
@@ -556,7 +556,7 @@ mod tests {
         let debug_ranges = DebugRanges::new(&[], LittleEndian);
         let debug_rnglists = DebugRngLists::new(&buf, LittleEndian);
         let rnglists = RangeLists::new(debug_ranges, debug_rnglists).unwrap();
-        let offset = RangeListsOffset((&first - &start) as usize);
+        let offset = RangeListsOffset((&first - &start) as u64);
         let mut ranges = rnglists.ranges(offset, 5, 0, 0x0100_0000).unwrap();
 
         // A normal range.
@@ -643,7 +643,7 @@ mod tests {
 
         // An offset at the end of buf.
         let mut ranges = rnglists
-            .ranges(RangeListsOffset(buf.len()), 5, 0, 0x0100_0000)
+            .ranges(RangeListsOffset(buf.len() as u64), 5, 0, 0x0100_0000)
             .unwrap();
         assert_eq!(ranges.next(), Ok(None));
     }
@@ -693,7 +693,7 @@ mod tests {
         let debug_ranges = DebugRanges::new(&[], LittleEndian);
         let debug_rnglists = DebugRngLists::new(&buf, LittleEndian);
         let rnglists = RangeLists::new(debug_ranges, debug_rnglists).unwrap();
-        let offset = RangeListsOffset((&first - &start) as usize);
+        let offset = RangeListsOffset((&first - &start) as u64);
         let mut ranges = rnglists.ranges(offset, 5, 0, 0x0100_0000).unwrap();
 
         // A normal range.
@@ -780,7 +780,7 @@ mod tests {
 
         // An offset at the end of buf.
         let mut ranges = rnglists
-            .ranges(RangeListsOffset(buf.len()), 5, 0, 0x0100_0000)
+            .ranges(RangeListsOffset(buf.len() as u64), 5, 0, 0x0100_0000)
             .unwrap();
         assert_eq!(ranges.next(), Ok(None));
     }
@@ -849,7 +849,7 @@ mod tests {
         let debug_ranges = DebugRanges::new(&buf, LittleEndian);
         let debug_rnglists = DebugRngLists::new(&[], LittleEndian);
         let rnglists = RangeLists::new(debug_ranges, debug_rnglists).unwrap();
-        let offset = RangeListsOffset((&first - &start) as usize);
+        let offset = RangeListsOffset((&first - &start) as u64);
         let version = 4;
         let mut ranges = rnglists.ranges(offset, version, 4, 0x0100_0000).unwrap();
 
@@ -910,7 +910,7 @@ mod tests {
 
         // An offset at the end of buf.
         let mut ranges = rnglists
-            .ranges(RangeListsOffset(buf.len()), version, 4, 0x0100_0000)
+            .ranges(RangeListsOffset(buf.len() as u64), version, 4, 0x0100_0000)
             .unwrap();
         assert_eq!(ranges.next(), Ok(None));
     }
@@ -947,7 +947,7 @@ mod tests {
         let debug_ranges = DebugRanges::new(&buf, LittleEndian);
         let debug_rnglists = DebugRngLists::new(&[], LittleEndian);
         let rnglists = RangeLists::new(debug_ranges, debug_rnglists).unwrap();
-        let offset = RangeListsOffset((&first - &start) as usize);
+        let offset = RangeListsOffset((&first - &start) as u64);
         let version = 4;
         let mut ranges = rnglists.ranges(offset, version, 8, 0x0100_0000).unwrap();
 
@@ -1008,7 +1008,7 @@ mod tests {
 
         // An offset at the end of buf.
         let mut ranges = rnglists
-            .ranges(RangeListsOffset(buf.len()), version, 8, 0x0100_0000)
+            .ranges(RangeListsOffset(buf.len() as u64), version, 8, 0x0100_0000)
             .unwrap();
         assert_eq!(ranges.next(), Ok(None));
     }
@@ -1041,7 +1041,12 @@ mod tests {
         assert_eq!(ranges.next(), Err(Error::InvalidAddressRange));
 
         // An invalid offset.
-        match rnglists.ranges(RangeListsOffset(buf.len() + 1), version, 4, 0x0100_0000) {
+        match rnglists.ranges(
+            RangeListsOffset(buf.len() as u64 + 1),
+            version,
+            4,
+            0x0100_0000,
+        ) {
             Err(Error::UnexpectedEof) => {}
             otherwise => panic!("Unexpected result: {:?}", otherwise),
         }

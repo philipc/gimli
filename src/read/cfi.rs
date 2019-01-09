@@ -243,7 +243,7 @@ impl<'a, R: Reader + 'a> EhHdrTable<'a, R> {
         let mut reader = self.hdr.table.clone();
 
         while len > 1 {
-            let head = reader.split(R::Offset::from_u64((len / 2) * row_size)?)?;
+            let head = reader.split((len / 2) * row_size)?;
             let tail = reader.clone();
 
             let pivot = parse_encoded_pointer(
@@ -274,7 +274,7 @@ impl<'a, R: Reader + 'a> EhHdrTable<'a, R> {
             }
         }
 
-        reader.skip(R::Offset::from_u64(size)?)?;
+        reader.skip(size)?;
 
         parse_encoded_pointer(
             self.hdr.table_enc,
@@ -312,11 +312,9 @@ impl<'a, R: Reader + 'a> EhHdrTable<'a, R> {
         bases: &BaseAddresses,
         frame: EhFrame<R>,
         cb: F,
-    ) -> Result<FrameDescriptionEntry<EhFrame<R>, R, R::Offset>>
+    ) -> Result<FrameDescriptionEntry<EhFrame<R>, R>>
     where
-        F: FnMut(
-            EhFrameOffset<R::Offset>,
-        ) -> Result<CommonInformationEntry<EhFrame<R>, R, R::Offset>>,
+        F: FnMut(EhFrameOffset) -> Result<CommonInformationEntry<EhFrame<R>, R>>,
     {
         let fdeptr = self.lookup(address, bases)?;
         let fdeptr = match fdeptr {
@@ -330,7 +328,7 @@ impl<'a, R: Reader + 'a> EhHdrTable<'a, R> {
         };
 
         // Calculate the offset in the EhFrame section
-        let offset = R::Offset::from_u64(fdeptr - eh_frame_ptr)?;
+        let offset = fdeptr - eh_frame_ptr;
         let mut input = &mut frame.section().clone();
         input.skip(offset)?;
 
@@ -434,31 +432,22 @@ pub enum ReturnAddressRegisterEncoding {
 
 /// An offset into an `UnwindSection`.
 //
-// Needed to avoid conflicting implementations of `Into<T>`.
-pub trait UnwindOffset<T = usize>: Copy + Debug + Eq + From<T>
-where
-    T: ReaderOffset,
-{
-    /// Convert an `UnwindOffset<T>` into a `T`.
-    fn into(self) -> T;
+// Needed to avoid conflicting implementations of `Into<u64>`.
+pub trait UnwindOffset: Copy + Debug + Eq + From<u64> {
+    /// Convert an `UnwindOffset` into a `u64`.
+    fn into(self) -> u64;
 }
 
-impl<T> UnwindOffset<T> for DebugFrameOffset<T>
-where
-    T: ReaderOffset,
-{
+impl UnwindOffset for DebugFrameOffset {
     #[inline]
-    fn into(self) -> T {
+    fn into(self) -> u64 {
         self.0
     }
 }
 
-impl<T> UnwindOffset<T> for EhFrameOffset<T>
-where
-    T: ReaderOffset,
-{
+impl UnwindOffset for EhFrameOffset {
     #[inline]
-    fn into(self) -> T {
+    fn into(self) -> u64 {
         self.0
     }
 }
@@ -473,7 +462,7 @@ pub trait _UnwindSectionPrivate<R: Reader> {
 
     /// Returns true if the given length value should be considered an
     /// end-of-entries sentinel.
-    fn length_value_is_end_of_entries(length: R::Offset) -> bool;
+    fn length_value_is_end_of_entries(length: ReaderOffset) -> bool;
 
     /// Return true if the given offset if the CIE sentinel, false otherwise.
     fn is_cie(format: Format, id: u64) -> bool;
@@ -487,7 +476,11 @@ pub trait _UnwindSectionPrivate<R: Reader> {
     /// internally store them relative to the section, so we handle translating
     /// `.eh_frame`'s relative offsets in this method. If the relative offset is
     /// out of bounds of the section, return `None`.
-    fn resolve_cie_offset(&self, input_before_offset: R, offset: R::Offset) -> Option<R::Offset>;
+    fn resolve_cie_offset(
+        &self,
+        input_before_offset: R,
+        offset: ReaderOffset,
+    ) -> Option<ReaderOffset>;
 
     /// Return true if our parser is compatible with the given version.
     fn compatible_version(version: u8) -> bool;
@@ -513,7 +506,7 @@ pub trait _UnwindSectionPrivate<R: Reader> {
 pub trait UnwindSection<R: Reader>: Clone + Debug + _UnwindSectionPrivate<R> {
     /// The offset type associated with this CFI section. Either
     /// `DebugFrameOffset` or `EhFrameOffset`.
-    type Offset: UnwindOffset<R::Offset>;
+    type Offset: UnwindOffset;
 
     /// Iterate over the `CommonInformationEntry`s and `FrameDescriptionEntry`s
     /// in this `.debug_frame` section.
@@ -534,7 +527,7 @@ pub trait UnwindSection<R: Reader>: Clone + Debug + _UnwindSectionPrivate<R> {
         &self,
         bases: &'bases BaseAddresses,
         offset: Self::Offset,
-    ) -> Result<CommonInformationEntry<Self, R, R::Offset>> {
+    ) -> Result<CommonInformationEntry<Self, R>> {
         let offset = UnwindOffset::into(offset);
         let input = &mut self.section().clone();
         input.skip(offset)?;
@@ -658,7 +651,7 @@ impl<R: Reader> _UnwindSectionPrivate<R> for DebugFrame<R> {
         &self.section
     }
 
-    fn length_value_is_end_of_entries(_: R::Offset) -> bool {
+    fn length_value_is_end_of_entries(_: ReaderOffset) -> bool {
         false
     }
 
@@ -676,7 +669,7 @@ impl<R: Reader> _UnwindSectionPrivate<R> for DebugFrame<R> {
         }
     }
 
-    fn resolve_cie_offset(&self, _: R, offset: R::Offset) -> Option<R::Offset> {
+    fn resolve_cie_offset(&self, _: R, offset: ReaderOffset) -> Option<ReaderOffset> {
         Some(offset)
     }
 
@@ -712,7 +705,7 @@ impl<R: Reader> _UnwindSectionPrivate<R> for DebugFrame<R> {
 }
 
 impl<R: Reader> UnwindSection<R> for DebugFrame<R> {
-    type Offset = DebugFrameOffset<R::Offset>;
+    type Offset = DebugFrameOffset;
 }
 
 impl<R: Reader> _UnwindSectionPrivate<R> for EhFrame<R> {
@@ -720,8 +713,8 @@ impl<R: Reader> _UnwindSectionPrivate<R> for EhFrame<R> {
         &self.section
     }
 
-    fn length_value_is_end_of_entries(length: R::Offset) -> bool {
-        length.into_u64() == 0
+    fn length_value_is_end_of_entries(length: ReaderOffset) -> bool {
+        length == 0
     }
 
     fn is_cie(_: Format, id: u64) -> bool {
@@ -737,8 +730,8 @@ impl<R: Reader> _UnwindSectionPrivate<R> for EhFrame<R> {
     fn resolve_cie_offset(
         &self,
         input_before_offset: R,
-        input_relative_offset: R::Offset,
-    ) -> Option<R::Offset> {
+        input_relative_offset: ReaderOffset,
+    ) -> Option<ReaderOffset> {
         let section = &mut self.section();
 
         // It would make no sense for any of these slices to be empty, since we
@@ -772,7 +765,7 @@ impl<R: Reader> _UnwindSectionPrivate<R> for EhFrame<R> {
 }
 
 impl<R: Reader> UnwindSection<R> for EhFrame<R> {
-    type Offset = EhFrameOffset<R::Offset>;
+    type Offset = EhFrameOffset;
 }
 
 /// Optional base addresses for the relative `DW_EH_PE_*` encoded pointers.
@@ -959,8 +952,8 @@ where
 }
 
 struct CfiEntryCommon<R: Reader> {
-    offset: R::Offset,
-    length: R::Offset,
+    offset: ReaderOffset,
+    length: ReaderOffset,
     format: Format,
     cie_offset_input: R,
     cie_id_or_offset: u64,
@@ -1012,7 +1005,7 @@ where
     Section: UnwindSection<R>,
 {
     /// This CFI entry is a `CommonInformationEntry`.
-    Cie(CommonInformationEntry<Section, R, R::Offset>),
+    Cie(CommonInformationEntry<Section, R>),
     /// This CFI entry is a `FrameDescriptionEntry`, however fully parsing it
     /// requires parsing its CIE first, so it is left in a partially parsed
     /// state.
@@ -1046,7 +1039,7 @@ where
             CommonInformationEntry::parse_rest(offset, length, format, bases, &section, rest)?;
         Ok(Some(CieOrFde::Cie(cie)))
     } else {
-        let cie_offset = R::Offset::from_u64(cie_id_or_offset)?;
+        let cie_offset = cie_id_or_offset;
         let cie_offset = match section.resolve_cie_offset(cie_offset_input, cie_offset) {
             None => return Err(Error::OffsetOutOfBounds),
             Some(cie_offset) => cie_offset,
@@ -1126,7 +1119,7 @@ impl Augmentation {
 
         let mut augmentation = Augmentation::default();
 
-        let augmentation_length = input.read_uleb128().and_then(R::Offset::from_u64)?;
+        let augmentation_length = input.read_uleb128()?;
         let rest = &mut input.split(augmentation_length)?;
 
         while !augmentation_str.is_empty() {
@@ -1184,7 +1177,7 @@ impl AugmentationData {
         // that defines augmentation data in the FDE is the 'L' character, so we
         // can just check for its presence directly.
 
-        let aug_data_len = input.read_uleb128().and_then(R::Offset::from_u64)?;
+        let aug_data_len = input.read_uleb128()?;
         let rest = &mut input.split(aug_data_len)?;
         let mut augmentation_data = AugmentationData::default();
         if let Some(encoding) = augmentation.lsda {
@@ -1205,21 +1198,19 @@ impl AugmentationData {
 /// > Frame Description Entries. There is at least one CIE in every non-empty
 /// > `.debug_frame` section.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CommonInformationEntry<Section, R, Offset = usize>
+pub struct CommonInformationEntry<Section, R>
 where
-    R: Reader<Offset = Offset>,
-    Offset: ReaderOffset,
+    R: Reader,
     Section: UnwindSection<R>,
-    Section::Offset: UnwindOffset<R::Offset>,
 {
     /// The offset of this entry from the start of its containing section.
-    offset: Offset,
+    offset: ReaderOffset,
 
     /// > A constant that gives the number of bytes of the CIE structure, not
     /// > including the length field itself (see Section 7.2.2). The size of the
     /// > length field plus the value of length must be an integral multiple of
     /// > the address size.
-    length: Offset,
+    length: ReaderOffset,
 
     format: Format,
 
@@ -1267,19 +1258,17 @@ where
     phantom: PhantomData<Section>,
 }
 
-impl<Section, R, Offset> CommonInformationEntry<Section, R, Offset>
+impl<Section, R> CommonInformationEntry<Section, R>
 where
-    R: Reader<Offset = Offset>,
-    Offset: ReaderOffset,
+    R: Reader,
     Section: UnwindSection<R>,
-    Section::Offset: UnwindOffset<R::Offset>,
 {
     #[allow(clippy::type_complexity)]
     fn parse<'bases>(
         bases: &'bases BaseAddresses,
         section: &Section,
         input: &mut R,
-    ) -> Result<Option<CommonInformationEntry<Section, R, Offset>>> {
+    ) -> Result<Option<CommonInformationEntry<Section, R>>> {
         let CfiEntryCommon {
             offset,
             length,
@@ -1301,13 +1290,13 @@ where
     }
 
     fn parse_rest(
-        offset: R::Offset,
-        length: R::Offset,
+        offset: ReaderOffset,
+        length: ReaderOffset,
         format: Format,
         bases: &BaseAddresses,
         section: &Section,
         mut rest: R,
-    ) -> Result<CommonInformationEntry<Section, R, Offset>> {
+    ) -> Result<CommonInformationEntry<Section, R>> {
         let version = rest.read_u8()?;
         if !Section::compatible_version(version) {
             return Err(Error::UnknownVersion(u64::from(version)));
@@ -1368,15 +1357,13 @@ where
 ///
 /// These methods are guaranteed not to allocate, acquire locks, or perform any
 /// other signal-unsafe operations.
-impl<Section, R, Offset> CommonInformationEntry<Section, R, Offset>
+impl<Section, R> CommonInformationEntry<Section, R>
 where
-    R: Reader<Offset = Offset>,
-    Offset: ReaderOffset,
+    R: Reader,
     Section: UnwindSection<R>,
-    Section::Offset: UnwindOffset<R::Offset>,
 {
     /// Get the offset of this entry from the start of its containing section.
-    pub fn offset(&self) -> Offset {
+    pub fn offset(&self) -> ReaderOffset {
         self.offset
     }
 
@@ -1394,7 +1381,7 @@ where
     /// > including the length field itself (see Section 7.2.2). The size of the
     /// > length field plus the value of length must be an integral multiple of
     /// > the address size.
-    pub fn entry_len(&self) -> Offset {
+    pub fn entry_len(&self) -> ReaderOffset {
         self.length
     }
 
@@ -1441,8 +1428,8 @@ where
     R: Reader,
     Section: UnwindSection<R>,
 {
-    offset: R::Offset,
-    length: R::Offset,
+    offset: ReaderOffset,
+    length: ReaderOffset,
     format: Format,
     cie_offset: Section::Offset,
     rest: R,
@@ -1460,9 +1447,9 @@ where
     /// You must provide a function get its associated CIE (either by parsing it
     /// on demand, or looking it up in some table mapping offsets to CIEs that
     /// you've already parsed, etc.)
-    pub fn parse<F>(&self, get_cie: F) -> Result<FrameDescriptionEntry<Section, R, R::Offset>>
+    pub fn parse<F>(&self, get_cie: F) -> Result<FrameDescriptionEntry<Section, R>>
     where
-        F: FnMut(Section::Offset) -> Result<CommonInformationEntry<Section, R, R::Offset>>,
+        F: FnMut(Section::Offset) -> Result<CommonInformationEntry<Section, R>>,
     {
         FrameDescriptionEntry::parse_rest(
             self.offset,
@@ -1479,21 +1466,19 @@ where
 
 /// A `FrameDescriptionEntry` is a set of CFA instructions for an address range.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FrameDescriptionEntry<Section, R, Offset = usize>
+pub struct FrameDescriptionEntry<Section, R>
 where
-    R: Reader<Offset = Offset>,
-    Offset: ReaderOffset,
+    R: Reader,
     Section: UnwindSection<R>,
-    Section::Offset: UnwindOffset<R::Offset>,
 {
     /// The start of this entry within its containing section.
-    offset: Offset,
+    offset: ReaderOffset,
 
     /// > A constant that gives the number of bytes of the header and
     /// > instruction stream for this function, not including the length field
     /// > itself (see Section 7.2.2). The size of the length field plus the value
     /// > of length must be an integral multiple of the address size.
-    length: Offset,
+    length: ReaderOffset,
 
     format: Format,
 
@@ -1501,7 +1486,7 @@ where
     /// that is associated with this FDE."
     ///
     /// This is the CIE at that offset.
-    cie: CommonInformationEntry<Section, R, Offset>,
+    cie: CommonInformationEntry<Section, R>,
 
     /// > The address of the first location associated with this table entry. If
     /// > the segment_size field of this FDE's CIE is non-zero, the initial
@@ -1522,31 +1507,29 @@ where
     instructions: R,
 }
 
-impl<Section, R, Offset> FrameDescriptionEntry<Section, R, Offset>
+impl<Section, R> FrameDescriptionEntry<Section, R>
 where
-    R: Reader<Offset = Offset>,
-    Offset: ReaderOffset,
+    R: Reader,
     Section: UnwindSection<R>,
-    Section::Offset: UnwindOffset<R::Offset>,
 {
     #[allow(clippy::too_many_arguments)]
     fn parse_rest<F>(
-        offset: R::Offset,
-        length: R::Offset,
+        offset: ReaderOffset,
+        length: ReaderOffset,
         format: Format,
         cie_pointer: Section::Offset,
         mut rest: R,
         section: &Section,
         bases: &BaseAddresses,
         mut get_cie: F,
-    ) -> Result<FrameDescriptionEntry<Section, R, Offset>>
+    ) -> Result<FrameDescriptionEntry<Section, R>>
     where
-        F: FnMut(Section::Offset) -> Result<CommonInformationEntry<Section, R, R::Offset>>,
+        F: FnMut(Section::Offset) -> Result<CommonInformationEntry<Section, R>>,
     {
         {
             let mut func = bases.eh_frame.func.borrow_mut();
             let offset = rest.offset_from(section.section());
-            *func = Some(offset.into_u64());
+            *func = Some(offset);
         }
 
         let cie = get_cie(cie_pointer)?;
@@ -1589,7 +1572,7 @@ where
 
     fn parse_addresses(
         input: &mut R,
-        cie: &CommonInformationEntry<Section, R, R::Offset>,
+        cie: &CommonInformationEntry<Section, R>,
         bases: &BaseAddresses,
         section: &Section,
     ) -> Result<(u64, u64)> {
@@ -1629,20 +1612,18 @@ where
 /// These methods are guaranteed not to allocate, acquire locks, or perform any
 /// other signal-unsafe operations.
 #[allow(clippy::len_without_is_empty)]
-impl<Section, R, Offset> FrameDescriptionEntry<Section, R, Offset>
+impl<Section, R> FrameDescriptionEntry<Section, R>
 where
-    R: Reader<Offset = Offset>,
-    Offset: ReaderOffset,
+    R: Reader,
     Section: UnwindSection<R>,
-    Section::Offset: UnwindOffset<R::Offset>,
 {
     /// Get the offset of this entry from the start of its containing section.
-    pub fn offset(&self) -> Offset {
+    pub fn offset(&self) -> ReaderOffset {
         self.offset
     }
 
     /// Get a reference to this FDE's CIE.
-    pub fn cie(&self) -> &CommonInformationEntry<Section, R, R::Offset> {
+    pub fn cie(&self) -> &CommonInformationEntry<Section, R> {
         &self.cie
     }
 
@@ -1650,7 +1631,7 @@ where
     /// > instruction stream for this function, not including the length field
     /// > itself (see Section 7.2.2). The size of the length field plus the value
     /// > of length must be an integral multiple of the address size.
-    pub fn entry_len(&self) -> Offset {
+    pub fn entry_len(&self) -> ReaderOffset {
         self.length
     }
 
@@ -1744,7 +1725,7 @@ where
 ///     /// Call `f` on each row in the given FDE's unwind table.
 ///     fn each_unwind_row<F>(
 ///         &mut self,
-///         fde: &gimli::FrameDescriptionEntry<S, R, R::Offset>,
+///         fde: &gimli::FrameDescriptionEntry<S, R>,
 ///         mut f: F,
 ///     ) -> gimli::Result<()>
 ///     where
@@ -1915,7 +1896,7 @@ where
     /// `InitializedUnwindContext`.
     pub fn initialize(
         mut self,
-        cie: &CommonInformationEntry<Section, R, R::Offset>,
+        cie: &CommonInformationEntry<Section, R>,
     ) -> UnwindResult<InitializedUnwindContext<Section, R>, Self> {
         self.0.assert_fully_uninitialized();
 
@@ -2159,14 +2140,14 @@ where
     R: 'cie + 'fde + 'ctx + Reader,
     Section: 'cie + 'fde + 'ctx + UnwindSection<R>,
 {
-    cie: &'cie CommonInformationEntry<Section, R, R::Offset>,
+    cie: &'cie CommonInformationEntry<Section, R>,
     next_start_address: u64,
     returned_last_row: bool,
     instructions: CallFrameInstructionIter<R>,
     ctx: &'ctx mut UnwindContext<Section, R>,
     // If this is `None`, then we are executing a CIE's initial_instructions. If
     // this is `Some`, then we are executing an FDE's instructions.
-    fde: Option<&'fde FrameDescriptionEntry<Section, R, R::Offset>>,
+    fde: Option<&'fde FrameDescriptionEntry<Section, R>>,
 }
 
 /// # Signal Safe Methods
@@ -2182,7 +2163,7 @@ where
     /// `FrameDescriptionEntry`'s CFI unwinding program.
     pub fn new(
         ctx: &'ctx mut InitializedUnwindContext<Section, R>,
-        fde: &'fde FrameDescriptionEntry<Section, R, R::Offset>,
+        fde: &'fde FrameDescriptionEntry<Section, R>,
     ) -> UnwindTable<'fde, 'fde, 'ctx, Section, R> {
         assert!(ctx.0.is_initialized);
         Self::new_internal(&mut ctx.0, fde.cie(), Some(fde))
@@ -2200,8 +2181,8 @@ where
 {
     fn new_internal(
         ctx: &'ctx mut UnwindContext<Section, R>,
-        cie: &'cie CommonInformationEntry<Section, R, R::Offset>,
-        fde: Option<&'fde FrameDescriptionEntry<Section, R, R::Offset>>,
+        cie: &'cie CommonInformationEntry<Section, R>,
+        fde: Option<&'fde FrameDescriptionEntry<Section, R>>,
     ) -> UnwindTable<'cie, 'fde, 'ctx, Section, R> {
         assert!(ctx.stack.len() >= 1);
         let next_start_address = fde.map_or(0, |fde| fde.initial_address());
@@ -3193,7 +3174,7 @@ impl<R: Reader> CallFrameInstruction<R> {
             }
 
             constants::DW_CFA_def_cfa_expression => {
-                let len = input.read_uleb128().and_then(R::Offset::from_u64)?;
+                let len = input.read_uleb128()?;
                 let expression = input.split(len)?;
                 Ok(CallFrameInstruction::DefCfaExpression {
                     expression: Expression(expression),
@@ -3202,7 +3183,7 @@ impl<R: Reader> CallFrameInstruction<R> {
 
             constants::DW_CFA_expression => {
                 let register = input.read_uleb128().and_then(Register::from_u64)?;
-                let len = input.read_uleb128().and_then(R::Offset::from_u64)?;
+                let len = input.read_uleb128()?;
                 let expression = input.split(len)?;
                 Ok(CallFrameInstruction::Expression {
                     register,
@@ -3255,7 +3236,7 @@ impl<R: Reader> CallFrameInstruction<R> {
 
             constants::DW_CFA_val_expression => {
                 let register = input.read_uleb128().and_then(Register::from_u64)?;
-                let len = input.read_uleb128().and_then(R::Offset::from_u64)?;
+                let len = input.read_uleb128()?;
                 let expression = input.split(len)?;
                 Ok(CallFrameInstruction::ValExpression {
                     register,
@@ -3325,20 +3306,20 @@ mod tests {
     use test_util::GimliSectionMethods;
     use vec::Vec;
 
-    type DebugFrameCie<R, O = usize> = CommonInformationEntry<DebugFrame<R>, R, O>;
-    type DebugFrameFde<R, O = usize> = FrameDescriptionEntry<DebugFrame<R>, R, O>;
-    type EhFrameFde<R, O = usize> = FrameDescriptionEntry<EhFrame<R>, R, O>;
+    type DebugFrameCie<R> = CommonInformationEntry<DebugFrame<R>, R>;
+    type DebugFrameFde<R> = FrameDescriptionEntry<DebugFrame<R>, R>;
+    type EhFrameFde<R> = FrameDescriptionEntry<EhFrame<R>, R>;
 
     fn parse_fde<Section, O, F, R>(
         section: Section,
         input: &mut R,
         get_cie: F,
-    ) -> Result<FrameDescriptionEntry<Section, R, R::Offset>>
+    ) -> Result<FrameDescriptionEntry<Section, R>>
     where
         R: Reader,
         Section: UnwindSection<R, Offset = O>,
-        O: UnwindOffset<R::Offset>,
-        F: FnMut(O) -> Result<CommonInformationEntry<Section, R, R::Offset>>,
+        O: UnwindOffset,
+        F: FnMut(O) -> Result<CommonInformationEntry<Section, R>>,
     {
         let bases = Default::default();
         match parse_cfi_entry(&bases, section, input) {
@@ -3427,8 +3408,8 @@ mod tests {
                 .append_bytes(cie.initial_instructions.into())
                 .mark(&end);
 
-            cie.length = (&end - &start) as usize;
-            length.set_const(cie.length as u64);
+            cie.length = (&end - &start) as u64;
+            length.set_const(cie.length);
 
             section
         }
@@ -3526,8 +3507,8 @@ mod tests {
 
             let section = section.append_bytes(fde.instructions.into()).mark(&end);
 
-            fde.length = (&end - &start) as usize;
-            length.set_const(fde.length as u64);
+            fde.length = (&end - &start) as u64;
+            length.set_const(fde.length);
 
             section
         }
@@ -3817,7 +3798,7 @@ mod tests {
         let rest = &mut EndianSlice::new(&section, LittleEndian);
 
         let get_cie = |offset| {
-            assert_eq!(offset, DebugFrameOffset(cie_offset as usize));
+            assert_eq!(offset, DebugFrameOffset(cie_offset));
             Ok(cie.clone())
         };
 
@@ -3869,7 +3850,7 @@ mod tests {
         let rest = &mut EndianSlice::new(&section, LittleEndian);
 
         let get_cie = |offset| {
-            assert_eq!(offset, DebugFrameOffset(cie_offset as usize));
+            assert_eq!(offset, DebugFrameOffset(cie_offset));
             Ok(cie.clone())
         };
 
@@ -3921,7 +3902,7 @@ mod tests {
         let rest = &mut EndianSlice::new(&section, LittleEndian);
 
         let get_cie = |offset| {
-            assert_eq!(offset, DebugFrameOffset(cie_offset as usize));
+            assert_eq!(offset, DebugFrameOffset(cie_offset));
             Ok(cie.clone())
         };
 
@@ -4013,10 +3994,10 @@ mod tests {
 
                 assert_eq!(partial.length, fde.length);
                 assert_eq!(partial.format, fde.format);
-                assert_eq!(partial.cie_offset, DebugFrameOffset(cie_offset as usize));
+                assert_eq!(partial.cie_offset, DebugFrameOffset(cie_offset));
 
                 let get_cie = |offset| {
-                    assert_eq!(offset, DebugFrameOffset(cie_offset as usize));
+                    assert_eq!(offset, DebugFrameOffset(cie_offset));
                     Ok(cie.clone())
                 };
 
@@ -4110,8 +4091,8 @@ mod tests {
 
         section.start().set_const(0);
 
-        let cie1_offset = cie1_location.value().unwrap() as usize;
-        let cie2_offset = cie2_location.value().unwrap() as usize;
+        let cie1_offset = cie1_location.value().unwrap();
+        let cie2_offset = cie2_location.value().unwrap();
 
         let contents = section.get_contents().unwrap();
         let debug_frame = DebugFrame::new(&contents, BigEndian);
@@ -4185,7 +4166,7 @@ mod tests {
 
         section.start().set_const(0);
 
-        let cie_offset = DebugFrameOffset(cie_location.value().unwrap() as usize);
+        let cie_offset = DebugFrameOffset(cie_location.value().unwrap());
 
         let contents = section.get_contents().unwrap();
         let debug_frame = DebugFrame::new(&contents, LittleEndian);
@@ -4857,7 +4838,7 @@ mod tests {
 
     #[test]
     fn test_eval_set_loc() {
-        let cie: DebugFrameCie<_, _> = make_test_cie();
+        let cie: DebugFrameCie<_> = make_test_cie();
         let ctx = UnwindContext::new();
         let mut expected = ctx.clone();
         expected.row_mut().end_address = 42;
@@ -4867,7 +4848,7 @@ mod tests {
 
     #[test]
     fn test_eval_set_loc_backwards() {
-        let cie: DebugFrameCie<_, _> = make_test_cie();
+        let cie: DebugFrameCie<_> = make_test_cie();
         let mut ctx = UnwindContext::new();
         ctx.row_mut().start_address = 999;
         let expected = ctx.clone();
@@ -4880,7 +4861,7 @@ mod tests {
 
     #[test]
     fn test_eval_advance_loc() {
-        let cie: DebugFrameCie<_, _> = make_test_cie();
+        let cie: DebugFrameCie<_> = make_test_cie();
         let mut ctx = UnwindContext::new();
         ctx.row_mut().start_address = 3;
         let mut expected = ctx.clone();
@@ -4891,7 +4872,7 @@ mod tests {
 
     #[test]
     fn test_eval_def_cfa() {
-        let cie: DebugFrameCie<_, _> = make_test_cie();
+        let cie: DebugFrameCie<_> = make_test_cie();
         let ctx = UnwindContext::new();
         let mut expected = ctx.clone();
         expected.set_cfa(CfaRule::RegisterAndOffset {
@@ -4910,7 +4891,7 @@ mod tests {
 
     #[test]
     fn test_eval_def_cfa_sf() {
-        let cie: DebugFrameCie<_, _> = make_test_cie();
+        let cie: DebugFrameCie<_> = make_test_cie();
         let ctx = UnwindContext::new();
         let mut expected = ctx.clone();
         expected.set_cfa(CfaRule::RegisterAndOffset {
@@ -4929,7 +4910,7 @@ mod tests {
 
     #[test]
     fn test_eval_def_cfa_register() {
-        let cie: DebugFrameCie<_, _> = make_test_cie();
+        let cie: DebugFrameCie<_> = make_test_cie();
         let mut ctx = UnwindContext::new();
         ctx.set_cfa(CfaRule::RegisterAndOffset {
             register: Register(3),
@@ -4951,7 +4932,7 @@ mod tests {
 
     #[test]
     fn test_eval_def_cfa_register_invalid_context() {
-        let cie: DebugFrameCie<_, _> = make_test_cie();
+        let cie: DebugFrameCie<_> = make_test_cie();
         let mut ctx = UnwindContext::new();
         ctx.set_cfa(CfaRule::Expression(Expression(EndianSlice::new(
             &[],
@@ -4969,7 +4950,7 @@ mod tests {
 
     #[test]
     fn test_eval_def_cfa_offset() {
-        let cie: DebugFrameCie<_, _> = make_test_cie();
+        let cie: DebugFrameCie<_> = make_test_cie();
         let mut ctx = UnwindContext::new();
         ctx.set_cfa(CfaRule::RegisterAndOffset {
             register: Register(3),
@@ -4986,7 +4967,7 @@ mod tests {
 
     #[test]
     fn test_eval_def_cfa_offset_invalid_context() {
-        let cie: DebugFrameCie<_, _> = make_test_cie();
+        let cie: DebugFrameCie<_> = make_test_cie();
         let mut ctx = UnwindContext::new();
         ctx.set_cfa(CfaRule::Expression(Expression(EndianSlice::new(
             &[],
@@ -5003,7 +4984,7 @@ mod tests {
     #[test]
     fn test_eval_def_cfa_expression() {
         let expr = [1, 2, 3, 4];
-        let cie: DebugFrameCie<_, _> = make_test_cie();
+        let cie: DebugFrameCie<_> = make_test_cie();
         let ctx = UnwindContext::new();
         let mut expected = ctx.clone();
         expected.set_cfa(CfaRule::Expression(Expression(EndianSlice::new(
@@ -5021,7 +5002,7 @@ mod tests {
 
     #[test]
     fn test_eval_undefined() {
-        let cie: DebugFrameCie<_, _> = make_test_cie();
+        let cie: DebugFrameCie<_> = make_test_cie();
         let ctx = UnwindContext::new();
         let mut expected = ctx.clone();
         expected
@@ -5038,7 +5019,7 @@ mod tests {
 
     #[test]
     fn test_eval_same_value() {
-        let cie: DebugFrameCie<_, _> = make_test_cie();
+        let cie: DebugFrameCie<_> = make_test_cie();
         let ctx = UnwindContext::new();
         let mut expected = ctx.clone();
         expected
@@ -5055,7 +5036,7 @@ mod tests {
 
     #[test]
     fn test_eval_offset() {
-        let cie: DebugFrameCie<_, _> = make_test_cie();
+        let cie: DebugFrameCie<_> = make_test_cie();
         let ctx = UnwindContext::new();
         let mut expected = ctx.clone();
         expected
@@ -5076,7 +5057,7 @@ mod tests {
 
     #[test]
     fn test_eval_offset_extended_sf() {
-        let cie: DebugFrameCie<_, _> = make_test_cie();
+        let cie: DebugFrameCie<_> = make_test_cie();
         let ctx = UnwindContext::new();
         let mut expected = ctx.clone();
         expected
@@ -5097,7 +5078,7 @@ mod tests {
 
     #[test]
     fn test_eval_val_offset() {
-        let cie: DebugFrameCie<_, _> = make_test_cie();
+        let cie: DebugFrameCie<_> = make_test_cie();
         let ctx = UnwindContext::new();
         let mut expected = ctx.clone();
         expected
@@ -5118,7 +5099,7 @@ mod tests {
 
     #[test]
     fn test_eval_val_offset_sf() {
-        let cie: DebugFrameCie<_, _> = make_test_cie();
+        let cie: DebugFrameCie<_> = make_test_cie();
         let ctx = UnwindContext::new();
         let mut expected = ctx.clone();
         expected
@@ -5140,7 +5121,7 @@ mod tests {
     #[test]
     fn test_eval_expression() {
         let expr = [1, 2, 3, 4];
-        let cie: DebugFrameCie<_, _> = make_test_cie();
+        let cie: DebugFrameCie<_> = make_test_cie();
         let ctx = UnwindContext::new();
         let mut expected = ctx.clone();
         expected
@@ -5162,7 +5143,7 @@ mod tests {
     #[test]
     fn test_eval_val_expression() {
         let expr = [1, 2, 3, 4];
-        let cie: DebugFrameCie<_, _> = make_test_cie();
+        let cie: DebugFrameCie<_> = make_test_cie();
         let ctx = UnwindContext::new();
         let mut expected = ctx.clone();
         expected
@@ -5183,7 +5164,7 @@ mod tests {
 
     #[test]
     fn test_eval_restore() {
-        let cie: DebugFrameCie<_, _> = make_test_cie();
+        let cie: DebugFrameCie<_> = make_test_cie();
         let fde = DebugFrameFde {
             offset: 0,
             format: Format::Dwarf64,
@@ -5215,7 +5196,7 @@ mod tests {
 
     #[test]
     fn test_eval_restore_havent_saved_initial_context() {
-        let cie: DebugFrameCie<_, _> = make_test_cie();
+        let cie: DebugFrameCie<_> = make_test_cie();
         let ctx = UnwindContext::new();
         let expected = ctx.clone();
         let instructions = [(
@@ -5229,7 +5210,7 @@ mod tests {
 
     #[test]
     fn test_eval_remember_state() {
-        let cie: DebugFrameCie<_, _> = make_test_cie();
+        let cie: DebugFrameCie<_> = make_test_cie();
         let ctx = UnwindContext::new();
         let mut expected = ctx.clone();
         expected.push_row().unwrap();
@@ -5239,7 +5220,7 @@ mod tests {
 
     #[test]
     fn test_eval_restore_state() {
-        let cie: DebugFrameCie<_, _> = make_test_cie();
+        let cie: DebugFrameCie<_> = make_test_cie();
 
         let mut ctx = UnwindContext::new();
         ctx.set_start_address(1);
@@ -5269,7 +5250,7 @@ mod tests {
 
     #[test]
     fn test_eval_nop() {
-        let cie: DebugFrameCie<_, _> = make_test_cie();
+        let cie: DebugFrameCie<_> = make_test_cie();
         let ctx = UnwindContext::new();
         let expected = ctx.clone();
         let instructions = [(Ok(false), CallFrameInstruction::Nop)];
@@ -5833,7 +5814,7 @@ mod tests {
         let bases = Default::default();
 
         let f = |o: EhFrameOffset| {
-            assert_eq!(o, EhFrameOffset(start_of_cie.value().unwrap() as usize));
+            assert_eq!(o, EhFrameOffset(start_of_cie.value().unwrap()));
             Ok(cie.clone())
         };
         assert_eq!(
@@ -5899,10 +5880,7 @@ mod tests {
         let buf = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
         let section = EhFrame::new(&buf, BigEndian);
         let subslice = EndianSlice::new(&buf[6..8], BigEndian);
-        assert_eq!(
-            section.resolve_cie_offset(subslice, ::std::usize::MAX),
-            None
-        );
+        assert_eq!(section.resolve_cie_offset(subslice, ::std::u64::MAX), None);
     }
 
     #[test]
@@ -5952,7 +5930,7 @@ mod tests {
             &mut section.range_from(end_of_cie.value().unwrap() as usize..),
             |o| {
                 offset = Some(o);
-                assert_eq!(o, EhFrameOffset(start_of_cie.value().unwrap() as usize));
+                assert_eq!(o, EhFrameOffset(start_of_cie.value().unwrap()));
                 Ok(cie.clone())
             },
         ) {
