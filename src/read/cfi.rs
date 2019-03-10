@@ -554,9 +554,9 @@ pub trait UnwindSection<R: Reader>: Clone + Debug + _UnwindSectionPrivate<R> {
     ///
     /// Can be [used with
     /// `FallibleIterator`](./index.html#using-with-fallibleiterator).
-    fn entries<'bases>(&self, bases: &'bases BaseAddresses) -> CfiEntriesIter<'bases, Self, R> {
+    fn entries<'a>(&'a self, bases: &'a BaseAddresses) -> CfiEntriesIter<'a, Self, R> {
         CfiEntriesIter {
-            section: self.clone(),
+            section: self,
             bases,
             input: self.section().clone(),
         }
@@ -571,15 +571,15 @@ pub trait UnwindSection<R: Reader>: Clone + Debug + _UnwindSectionPrivate<R> {
         let offset = UnwindOffset::into(offset);
         let input = &mut self.section().clone();
         input.skip(offset)?;
-        CommonInformationEntry::parse(bases, self, input)
+        CommonInformationEntry::parse(self, bases, input)
     }
 
     /// Parse the `PartialFrameDescriptionEntry` at the given offset.
-    fn partial_fde_from_offset<'bases>(
-        &self,
-        bases: &'bases BaseAddresses,
+    fn partial_fde_from_offset<'a>(
+        &'a self,
+        bases: &'a BaseAddresses,
         offset: Self::Offset,
-    ) -> Result<PartialFrameDescriptionEntry<'bases, Self, R>> {
+    ) -> Result<PartialFrameDescriptionEntry<'a, Self, R>> {
         let offset = UnwindOffset::into(offset);
         let input = &mut self.section().clone();
         input.skip(offset)?;
@@ -596,8 +596,7 @@ pub trait UnwindSection<R: Reader>: Clone + Debug + _UnwindSectionPrivate<R> {
     where
         F: FnMut(&Self, &BaseAddresses, Self::Offset) -> Result<CommonInformationEntry<R>>,
     {
-        let partial = self.partial_fde_from_offset(bases, offset)?;
-        partial.parse(get_cie)
+        self.partial_fde_from_offset(bases, offset)?.parse(get_cie)
     }
 
     /// Find the `FrameDescriptionEntry` for the given address.
@@ -932,28 +931,28 @@ impl BaseAddresses {
 /// # }
 /// ```
 #[derive(Clone, Debug)]
-pub struct CfiEntriesIter<'bases, Section, R>
+pub struct CfiEntriesIter<'a, Section, R>
 where
     R: Reader,
     Section: UnwindSection<R>,
 {
-    section: Section,
-    bases: &'bases BaseAddresses,
+    section: &'a Section,
+    bases: &'a BaseAddresses,
     input: R,
 }
 
-impl<'bases, Section, R> CfiEntriesIter<'bases, Section, R>
+impl<'a, Section, R> CfiEntriesIter<'a, Section, R>
 where
     R: Reader,
     Section: UnwindSection<R>,
 {
     /// Advance the iterator to the next entry.
-    pub fn next(&mut self) -> Result<Option<CieOrFde<'bases, Section, R>>> {
+    pub fn next(&mut self) -> Result<Option<CieOrFde<'a, Section, R>>> {
         if self.input.is_empty() {
             return Ok(None);
         }
 
-        match parse_cfi_entry(self.bases, &self.section, &mut self.input) {
+        match parse_cfi_entry(self.bases, self.section, &mut self.input) {
             Err(e) => {
                 self.input.empty();
                 Err(e)
@@ -967,12 +966,12 @@ where
     }
 }
 
-impl<'bases, Section, R> FallibleIterator for CfiEntriesIter<'bases, Section, R>
+impl<'a, Section, R> FallibleIterator for CfiEntriesIter<'a, Section, R>
 where
     R: Reader,
     Section: UnwindSection<R>,
 {
-    type Item = CieOrFde<'bases, Section, R>;
+    type Item = CieOrFde<'a, Section, R>;
     type Error = Error;
 
     fn next(&mut self) -> ::std::result::Result<Option<Self::Item>, Self::Error> {
@@ -982,25 +981,26 @@ where
 
 /// Either a `CommonInformationEntry` (CIE) or a `FrameDescriptionEntry` (FDE).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CieOrFde<'bases, Section, R>
+pub enum CieOrFde<'a, Section, R>
 where
     R: Reader,
     Section: UnwindSection<R>,
 {
-    /// This CFI entry is a `CommonInformationEntry`.
-    Cie(CommonInformationEntry<R>),
+    /// This CFI entry is a `CommonInformationEntry`. It is left partially parsed
+    /// because often the caller is only interested in FDEs.
+    Cie(PartialCommonInformationEntry<'a, Section, R>),
     /// This CFI entry is a `FrameDescriptionEntry`, however fully parsing it
     /// requires parsing its CIE first, so it is left in a partially parsed
     /// state.
-    Fde(PartialFrameDescriptionEntry<'bases, Section, R>),
+    Fde(PartialFrameDescriptionEntry<'a, Section, R>),
 }
 
 #[allow(clippy::type_complexity)]
-fn parse_cfi_entry<'bases, Section, R>(
-    bases: &'bases BaseAddresses,
-    section: &Section,
+fn parse_cfi_entry<'a, Section, R>(
+    bases: &'a BaseAddresses,
+    section: &'a Section,
     input: &mut R,
-) -> Result<Option<CieOrFde<'bases, Section, R>>>
+) -> Result<Option<CieOrFde<'a, Section, R>>>
 where
     R: Reader,
     Section: UnwindSection<R>,
@@ -1020,7 +1020,14 @@ where
     };
 
     if Section::is_cie(format, cie_id_or_offset) {
-        let cie = CommonInformationEntry::parse_rest(offset, length, format, bases, section, rest)?;
+        let cie = PartialCommonInformationEntry {
+            offset,
+            length,
+            format,
+            rest,
+            section,
+            bases,
+        };
         Ok(Some(CieOrFde::Cie(cie)))
     } else {
         let cie_offset = R::Offset::from_u64(cie_id_or_offset)?;
@@ -1035,7 +1042,7 @@ where
             format,
             cie_offset: cie_offset.into(),
             rest,
-            section: section.clone(),
+            section,
             bases,
         };
 
@@ -1167,6 +1174,51 @@ impl AugmentationData {
     }
 }
 
+/// A partially parsed `CommonInformationEntry`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PartialCommonInformationEntry<'a, Section, R>
+where
+    R: Reader,
+    Section: UnwindSection<R>,
+{
+    offset: R::Offset,
+    length: R::Offset,
+    format: Format,
+    rest: R,
+    section: &'a Section,
+    bases: &'a BaseAddresses,
+}
+
+impl<'a, Section, R> PartialCommonInformationEntry<'a, Section, R>
+where
+    R: Reader,
+    Section: UnwindSection<R>,
+{
+    fn parse_partial(
+        section: &'a Section,
+        bases: &'a BaseAddresses,
+        input: &mut R,
+    ) -> Result<PartialCommonInformationEntry<'a, Section, R>> {
+        match parse_cfi_entry(bases, section, input)? {
+            Some(CieOrFde::Cie(partial)) => Ok(partial),
+            Some(CieOrFde::Fde(_)) => Err(Error::NotCieId),
+            None => Err(Error::NoEntryAtGivenOffset),
+        }
+    }
+
+    /// Fully parse this CIE.
+    pub fn parse(self) -> Result<CommonInformationEntry<R>> {
+        CommonInformationEntry::parse_rest(
+            self.offset,
+            self.length,
+            self.format,
+            self.rest,
+            self.section,
+            self.bases,
+        )
+    }
+}
+
 /// > A Common Information Entry holds information that is shared among many
 /// > Frame Description Entries. There is at least one CIE in every non-empty
 /// > `.debug_frame` section.
@@ -1231,24 +1283,20 @@ where
 
 impl<R: Reader> CommonInformationEntry<R> {
     fn parse<Section: UnwindSection<R>>(
-        bases: &BaseAddresses,
         section: &Section,
+        bases: &BaseAddresses,
         input: &mut R,
     ) -> Result<CommonInformationEntry<R>> {
-        match parse_cfi_entry(bases, section, input)? {
-            Some(CieOrFde::Cie(cie)) => Ok(cie),
-            Some(CieOrFde::Fde(_)) => Err(Error::NotCieId),
-            None => Err(Error::NoEntryAtGivenOffset),
-        }
+        PartialCommonInformationEntry::parse_partial(section, bases, input)?.parse()
     }
 
     fn parse_rest<Section: UnwindSection<R>>(
         offset: R::Offset,
         length: R::Offset,
         format: Format,
-        bases: &BaseAddresses,
-        section: &Section,
         mut rest: R,
+        section: &Section,
+        bases: &BaseAddresses,
     ) -> Result<CommonInformationEntry<R>> {
         let version = rest.read_u8()?;
         if !Section::compatible_version(version) {
@@ -1390,7 +1438,7 @@ impl<R: Reader> CommonInformationEntry<R> {
 ///
 /// Fully parsing this FDE requires first parsing its CIE.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PartialFrameDescriptionEntry<'bases, Section, R>
+pub struct PartialFrameDescriptionEntry<'a, Section, R>
 where
     R: Reader,
     Section: UnwindSection<R>,
@@ -1400,20 +1448,20 @@ where
     format: Format,
     cie_offset: Section::Offset,
     rest: R,
-    section: Section,
-    bases: &'bases BaseAddresses,
+    section: &'a Section,
+    bases: &'a BaseAddresses,
 }
 
-impl<'bases, Section, R> PartialFrameDescriptionEntry<'bases, Section, R>
+impl<'a, Section, R> PartialFrameDescriptionEntry<'a, Section, R>
 where
     R: Reader,
     Section: UnwindSection<R>,
 {
     fn parse_partial(
-        section: &Section,
-        bases: &'bases BaseAddresses,
+        section: &'a Section,
+        bases: &'a BaseAddresses,
         input: &mut R,
-    ) -> Result<PartialFrameDescriptionEntry<'bases, Section, R>> {
+    ) -> Result<PartialFrameDescriptionEntry<'a, Section, R>> {
         match parse_cfi_entry(bases, section, input)? {
             Some(CieOrFde::Cie(_)) => Err(Error::NotFdePointer),
             Some(CieOrFde::Fde(partial)) => Ok(partial),
@@ -1436,7 +1484,7 @@ where
             self.format,
             self.cie_offset,
             self.rest.clone(),
-            &self.section,
+            self.section,
             self.bases,
             get_cie,
         )
@@ -3510,7 +3558,7 @@ mod tests {
         debug_frame.set_address_size(address_size);
         let input = &mut EndianSlice::new(&section, E::default());
         let bases = Default::default();
-        let result = CommonInformationEntry::parse(&bases, &debug_frame, input);
+        let result = CommonInformationEntry::parse(&debug_frame, &bases, input);
         let result = result.map(|cie| (*input, cie));
         assert_eq!(result, expected);
     }
@@ -3690,8 +3738,8 @@ mod tests {
         let bases = Default::default();
         assert_eq!(
             CommonInformationEntry::parse(
-                &bases,
                 &DebugFrame::new(&contents, LittleEndian),
+                &bases,
                 &mut EndianSlice::new(&contents, LittleEndian)
             ),
             Err(Error::UnexpectedEof)
@@ -3922,8 +3970,8 @@ mod tests {
 
         let bases = Default::default();
         assert_eq!(
-            parse_cfi_entry(&bases, &debug_frame, rest),
-            Ok(Some(CieOrFde::Cie(cie)))
+            CommonInformationEntry::parse(&debug_frame, &bases, rest),
+            Ok(cie),
         );
         assert_eq!(*rest, EndianSlice::new(&expected_rest, BigEndian));
     }
@@ -4080,8 +4128,19 @@ mod tests {
         let bases = Default::default();
         let mut entries = debug_frame.entries(&bases);
 
-        assert_eq!(entries.next(), Ok(Some(CieOrFde::Cie(cie1.clone()))));
-        assert_eq!(entries.next(), Ok(Some(CieOrFde::Cie(cie2.clone()))));
+        match entries.next() {
+            Ok(Some(CieOrFde::Cie(partial))) => {
+                assert_eq!(partial.parse(), Ok(cie1.clone()));
+            }
+            otherwise => panic!("Unexpected result: {:#?}", otherwise),
+        }
+
+        match entries.next() {
+            Ok(Some(CieOrFde::Cie(partial))) => {
+                assert_eq!(partial.parse(), Ok(cie2.clone()));
+            }
+            otherwise => panic!("Unexpected result: {:#?}", otherwise),
+        }
 
         match entries.next() {
             Ok(Some(CieOrFde::Fde(partial))) => {
@@ -6440,7 +6499,12 @@ mod tests {
 
         let bases = BaseAddresses::default();
         let mut iter = section.entries(&bases);
-        assert_eq!(iter.next(), Err(Error::FuncRelativePointerInBadContext));
+        match iter.next() {
+            Ok(Some(CieOrFde::Cie(partial))) => {
+                assert_eq!(partial.parse(), Err(Error::FuncRelativePointerInBadContext));
+            }
+            otherwise => panic!("Unexpected result: {:#?}", otherwise),
+        }
     }
 
     #[test]

@@ -584,7 +584,8 @@ mod cfi {
             let mut entries = eh_frame.entries(&bases);
             while let Some(entry) = entries.next().expect("Should parse CFI entry OK") {
                 match entry {
-                    CieOrFde::Cie(cie) => {
+                    CieOrFde::Cie(partial) => {
+                        let cie = partial.parse().expect("Should parse CIE");
                         let mut instrs = cie.instructions(&eh_frame, &bases);
                         while let Some(i) =
                             instrs.next().expect("Can parse next CFI instruction OK")

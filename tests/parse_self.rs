@@ -383,7 +383,8 @@ fn test_parse_self_eh_frame() {
     let mut entries = eh_frame.entries(&bases);
     while let Some(entry) = entries.next().expect("Should parse CFI entry OK") {
         match entry {
-            CieOrFde::Cie(cie) => {
+            CieOrFde::Cie(partial) => {
+                let cie = partial.parse().expect("Should parse CIE");
                 let mut instrs = cie.instructions(&eh_frame, &bases);
                 while let Some(_) = instrs.next().expect("Can parse next CFI instruction OK") {
                     // TODO FITZGEN

@@ -626,7 +626,8 @@ fn dump_eh_frame<R: Reader, W: Write>(
     loop {
         match entries.next()? {
             None => return Ok(()),
-            Some(gimli::CieOrFde::Cie(cie)) => {
+            Some(gimli::CieOrFde::Cie(partial)) => {
+                let cie = partial.parse()?;
                 writeln!(w)?;
                 writeln!(w, "{:#010x}: CIE", cie.offset())?;
                 writeln!(w, "        length: {:#010x}", cie.entry_len())?;
