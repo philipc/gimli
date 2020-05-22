@@ -1,5 +1,5 @@
 use alloc::vec::Vec;
-use core::fmt;
+use core::fmt::{self, Debug};
 use core::num::Wrapping;
 use core::result;
 
@@ -852,8 +852,7 @@ impl LineRow {
             }
 
             LineInstruction::ConstAddPc => {
-                let adjusted = self.adjust_opcode(255, program.header());
-                let operation_advance = adjusted / program.header().line_encoding.line_range;
+                let operation_advance = program.header().special_opcodes.0[255].1;
                 self.apply_operation_advance(u64::from(operation_advance), program.header());
                 false
             }
@@ -967,18 +966,9 @@ impl LineRow {
         }
     }
 
-    #[inline]
-    fn adjust_opcode<R: Reader>(&self, opcode: u8, header: &LineProgramHeader<R>) -> u8 {
-        opcode - header.opcode_base
-    }
-
     /// Section 6.2.5.1
     fn exec_special_opcode<R: Reader>(&mut self, opcode: u8, header: &LineProgramHeader<R>) {
-        let adjusted_opcode = self.adjust_opcode(opcode, header);
-
-        let line_range = header.line_encoding.line_range;
-        let line_advance = adjusted_opcode % line_range;
-        let operation_advance = adjusted_opcode / line_range;
+        let (line_advance, operation_advance) = header.special_opcodes.0[opcode as usize];
 
         // Step 1
         let line_base = i64::from(header.line_encoding.line_base);
@@ -1023,6 +1013,38 @@ pub struct LineSequence<R: Reader> {
 )]
 pub type LineNumberProgramHeader<R, Offset> = LineProgramHeader<R, Offset>;
 
+/// The line_advance and operation_advance for each special opcode.
+#[derive(Clone)]
+struct SpecialOpcodes([(u8, u8); 256]);
+
+impl Debug for SpecialOpcodes {
+    fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        Ok(())
+    }
+}
+
+impl PartialEq for SpecialOpcodes {
+    fn eq(&self, other: &SpecialOpcodes) -> bool {
+        &self.0[..] == &other.0[..]
+    }
+}
+
+impl Eq for SpecialOpcodes {}
+
+impl SpecialOpcodes {
+    #[inline]
+    fn new(opcode_base: u8, line_range: u8) -> Self {
+        let mut special_opcodes = [(0, 0); 256];
+        for opcode in opcode_base..=255 {
+            let adjusted_opcode = opcode - opcode_base;
+            let line_advance = adjusted_opcode % line_range;
+            let operation_advance = adjusted_opcode / line_range;
+            special_opcodes[opcode as usize] = (line_advance, operation_advance);
+        }
+        SpecialOpcodes(special_opcodes)
+    }
+}
+
 /// A header for a line number program in the `.debug_line` section, as defined
 /// in section 6.2.4 of the standard.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1041,6 +1063,11 @@ where
 
     /// "The number assigned to the first special opcode."
     opcode_base: u8,
+
+    /// The line_advance and operation_advance for each special opcode.
+    ///
+    /// This is calculated from the other header fields.
+    special_opcodes: SpecialOpcodes,
 
     /// "This array specifies the number of LEB128 operands for each of the
     /// standard opcodes. The first element of the array corresponds to the
@@ -1349,6 +1376,8 @@ where
             return Err(Error::OpcodeBaseZero);
         }
 
+        let special_opcodes = SpecialOpcodes::new(opcode_base, line_range);
+
         let standard_opcode_count = R::Offset::from_u8(opcode_base - 1);
         let standard_opcode_lengths = rest.split(standard_opcode_count)?;
 
@@ -1412,6 +1441,7 @@ where
             header_length,
             line_encoding,
             opcode_base,
+            special_opcodes,
             standard_opcode_lengths,
             directory_entry_format,
             include_directories,
@@ -2149,6 +2179,7 @@ mod tests {
             header_length: 1,
             line_encoding,
             opcode_base: OPCODE_BASE,
+            special_opcodes: SpecialOpcodes::new(OPCODE_BASE, line_encoding.line_range),
             standard_opcode_lengths: EndianSlice::new(STANDARD_OPCODE_LENGTHS, LittleEndian),
             file_names: vec![
                 FileEntry {
