@@ -5,7 +5,7 @@ use object::{Object, ObjectSection};
 use std::cell::RefCell;
 use std::convert::TryInto;
 use std::io::{Read, Seek};
-use std::{borrow, cmp, env, fs, io};
+use std::{borrow, cmp, env, fmt, fs, io};
 
 fn main() {
     for path in env::args().skip(1) {
@@ -14,54 +14,101 @@ fn main() {
     }
 }
 
-fn dump_file(file: fs::File) -> Result<(), gimli::Error> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Error {
+    GimliError(gimli::Error),
+    ObjectError(object::read::Error),
+    IoError,
+}
+
+impl fmt::Display for Error {
+    #[inline]
+    fn fmt(&self, f: &mut fmt::Formatter) -> ::std::result::Result<(), fmt::Error> {
+        fmt::Debug::fmt(self, f)
+    }
+}
+
+impl From<gimli::Error> for Error {
+    fn from(err: gimli::Error) -> Self {
+        Error::GimliError(err)
+    }
+}
+
+impl From<io::Error> for Error {
+    fn from(_: io::Error) -> Self {
+        Error::IoError
+    }
+}
+
+impl From<object::read::Error> for Error {
+    fn from(err: object::read::Error) -> Self {
+        Error::ObjectError(err)
+    }
+}
+
+fn dump_file(file: fs::File) -> Result<(), Error> {
     // Parse the file and locate the DWARF sections.
-    let reader = object::ReadCache::new(file);
-    let object = object::File::parse(&reader).unwrap();
+    let reader = object::ReadCache::new(&file);
+    let object = object::File::parse(&reader)?;
     let endian = if object.is_little_endian() {
         gimli::RunTimeEndian::Little
     } else {
         gimli::RunTimeEndian::Big
     };
 
-    // Locate the file range for a section's data.
-    let locate_section =
-        |id: gimli::SectionId| -> Result<object::CompressedFileRange, gimli::Error> {
-            match object.section_by_name(id.name()) {
-                Some(ref section) => Ok(section.compressed_file_range().unwrap()),
-                None => Ok(object::CompressedFileRange::none(None)),
+    // Create a buffer for a section's data.
+    let mut next_offset_id = 0;
+    let load_section = |id: gimli::SectionId| -> Result<SectionBuffer, Error> {
+        match object.section_by_name(id.name()) {
+            Some(ref section) => {
+                let range = section.compressed_file_range()?;
+                let offset_id = next_offset_id;
+                next_offset_id = offset_id + range.uncompressed_size;
+                if range.format == object::CompressionFormat::None {
+                    Ok(SectionBuffer::new_file(
+                        offset_id,
+                        &file,
+                        range.offset,
+                        range.uncompressed_size,
+                    ))
+                } else {
+                    let mut compressed_data = vec![0; range.compressed_size as usize];
+                    (&file).seek(io::SeekFrom::Start(range.offset))?;
+                    (&file).read_exact(&mut compressed_data)?;
+                    let data = object::CompressedData {
+                        format: range.format,
+                        data: &compressed_data,
+                        uncompressed_size: range.uncompressed_size,
+                    }
+                    .decompress()?
+                    .into_owned()
+                    .into_boxed_slice();
+                    Ok(SectionBuffer::new_memory(offset_id, data))
+                }
             }
-        };
-    // Locate a supplementary section. We don't have a supplementary object file,
-    // so always return an empty range.
-    let locate_section_sup = |_| Ok(object::CompressedFileRange::none(None));
-
-    // Locate all of the sections.
-    let dwarf_file_range = gimli::Dwarf::load(&locate_section, &locate_section_sup)?;
-
-    // Done parsing the object.
-    let file = reader.into_inner();
+            None => {
+                let offset_id = next_offset_id;
+                next_offset_id = offset_id + 1;
+                Ok(SectionBuffer::none(offset_id))
+            }
+        }
+    };
+    // Load a supplementary section. We don't have a supplementary object file,
+    // so always return an empty buffer.
+    let load_section_sup = |_| Ok(SectionBuffer::none(!0));
 
     // Create buffers for each DWARF section.
-    let dwarf_buffer = dwarf_file_range.borrow(|range| {
-        // TODO: handle compressed sections
-        assert!(range.format == object::CompressionFormat::None);
-        RefCell::new(SectionBuffer::new(
-            &file,
-            range.offset,
-            range.uncompressed_size,
-        ))
-    });
-    // And now create cloneable references to those buffers.
-    let dwarf = dwarf_buffer.borrow(|buffer| {
-        let range_start = buffer.borrow().file_offset;
-        let range_size = buffer.borrow().file_size;
-        SectionReader {
-            buffer,
-            endian,
-            range_start,
-            range_size,
-        }
+    let dwarf_buffer = gimli::Dwarf::load(load_section, load_section_sup)?;
+
+    // Done parsing the object.
+    drop(reader);
+
+    // Create cloneable references to those buffers.
+    let dwarf = dwarf_buffer.borrow(|buffer| SectionReader {
+        buffer,
+        endian,
+        range_start: 0,
+        range_size: buffer.len(),
     });
 
     // Iterate over the compilation units.
@@ -103,7 +150,85 @@ fn dump_file(file: fs::File) -> Result<(), gimli::Error> {
 }
 
 #[derive(Debug)]
-struct SectionBuffer<'a> {
+enum SectionBuffer<'a> {
+    Memory(MemoryBuffer),
+    File(RefCell<FileBuffer<'a>>),
+}
+
+impl<'a> SectionBuffer<'a> {
+    fn none(offset_id: u64) -> Self {
+        SectionBuffer::Memory(MemoryBuffer {
+            offset_id,
+            buf: Vec::new().into_boxed_slice(),
+        })
+    }
+
+    fn new_memory(offset_id: u64, buf: Box<[u8]>) -> Self {
+        SectionBuffer::Memory(MemoryBuffer { offset_id, buf })
+    }
+
+    fn new_file(offset_id: u64, file: &'a fs::File, file_offset: u64, file_size: u64) -> Self {
+        SectionBuffer::File(RefCell::new(FileBuffer {
+            offset_id,
+            file,
+            file_offset,
+            file_size,
+            buf: vec![0; 8192].into_boxed_slice(),
+            buf_offset: file_offset,
+            buf_size: 0,
+        }))
+    }
+
+    fn len(&self) -> u64 {
+        match self {
+            SectionBuffer::Memory(mem) => mem.buf.len() as u64,
+            SectionBuffer::File(file) => file.borrow().file_size,
+        }
+    }
+
+    fn read_bytes_at(&self, section_offset: u64, buf: &mut [u8]) -> Result<(), gimli::Error> {
+        match self {
+            SectionBuffer::Memory(mem) => mem.read_bytes_at(section_offset, buf),
+            SectionBuffer::File(file) => file.borrow_mut().read_bytes_at(section_offset, buf),
+        }
+    }
+
+    fn offset_id(&self, offset: u64) -> gimli::ReaderOffsetId {
+        match self {
+            SectionBuffer::Memory(mem) => mem.offset_id(offset),
+            SectionBuffer::File(file) => file.borrow().offset_id(offset),
+        }
+    }
+}
+
+#[derive(Debug)]
+struct MemoryBuffer {
+    offset_id: u64,
+    buf: Box<[u8]>,
+}
+
+impl MemoryBuffer {
+    fn read_bytes_at(&self, section_offset: u64, buf: &mut [u8]) -> Result<(), gimli::Error> {
+        buf.clone_from_slice(
+            self.buf
+                .get(section_offset as usize..)
+                .ok_or(gimli::Error::UnexpectedEof(self.offset_id(section_offset)))?
+                .get(..buf.len())
+                .ok_or(gimli::Error::UnexpectedEof(
+                    self.offset_id(section_offset + buf.len() as u64),
+                ))?,
+        );
+        Ok(())
+    }
+
+    fn offset_id(&self, offset: u64) -> gimli::ReaderOffsetId {
+        gimli::ReaderOffsetId(self.offset_id + offset)
+    }
+}
+
+#[derive(Debug)]
+struct FileBuffer<'a> {
+    offset_id: u64,
     file: &'a fs::File,
     file_offset: u64,
     file_size: u64,
@@ -112,19 +237,13 @@ struct SectionBuffer<'a> {
     buf_size: usize,
 }
 
-impl<'a> SectionBuffer<'a> {
-    fn new(file: &'a fs::File, file_offset: u64, file_size: u64) -> Self {
-        SectionBuffer {
-            file,
-            file_offset,
-            file_size,
-            buf: vec![0; 8192].into_boxed_slice(),
-            buf_offset: file_offset,
-            buf_size: 0,
-        }
-    }
+impl<'a> FileBuffer<'a> {
+    fn read_bytes_at(&mut self, section_offset: u64, buf: &mut [u8]) -> Result<(), gimli::Error> {
+        let file_offset = self
+            .file_offset
+            .checked_add(section_offset)
+            .ok_or(gimli::Error::Io)?;
 
-    fn read_bytes_at(&mut self, file_offset: u64, buf: &mut [u8]) -> Result<(), gimli::Error> {
         // Check if completely in the buffer.
         // TODO: use partial reads if available.
         if let Some(Ok(buf_start)) = file_offset
@@ -141,9 +260,6 @@ impl<'a> SectionBuffer<'a> {
         }
 
         // Check the requested range is valid.
-        let section_offset = file_offset
-            .checked_sub(self.file_offset)
-            .ok_or(gimli::Error::Io)?;
         let remaining = self
             .file_size
             .checked_sub(section_offset)
@@ -179,12 +295,17 @@ impl<'a> SectionBuffer<'a> {
         buf.clone_from_slice(&self.buf[..buf.len()]);
         Ok(())
     }
+
+    fn offset_id(&self, offset: u64) -> gimli::ReaderOffsetId {
+        gimli::ReaderOffsetId(self.offset_id + offset)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
 struct SectionReader<'a> {
-    buffer: &'a RefCell<SectionBuffer<'a>>,
+    buffer: &'a SectionBuffer<'a>,
     endian: gimli::RunTimeEndian,
+    // Relative to section
     range_start: u64,
     range_size: u64,
 }
@@ -230,7 +351,7 @@ impl<'a> gimli::Reader for SectionReader<'a> {
 
     #[inline]
     fn offset_id(&self) -> gimli::ReaderOffsetId {
-        gimli::ReaderOffsetId(self.range_start)
+        self.buffer.offset_id(self.range_start)
     }
 
     #[inline]
@@ -256,9 +377,7 @@ impl<'a> gimli::Reader for SectionReader<'a> {
         while chunk_start < end {
             let chunk_size = cmp::min(4096, end - chunk_start);
             let read_chunk = &mut buf[..chunk_size as usize];
-            self.buffer
-                .borrow_mut()
-                .read_bytes_at(chunk_start, read_chunk)?;
+            self.buffer.read_bytes_at(chunk_start, read_chunk)?;
             if let Some(pos) = read_chunk.iter().position(|b| *b == byte) {
                 return Ok((chunk_start - start) + pos as u64);
             }
@@ -294,9 +413,7 @@ impl<'a> gimli::Reader for SectionReader<'a> {
     fn to_slice(&self) -> gimli::Result<borrow::Cow<[u8]>> {
         // TODO: peek at the buffered reader
         let mut slice = vec![0; self.range_size as usize];
-        self.buffer
-            .borrow_mut()
-            .read_bytes_at(self.range_start, &mut slice)?;
+        self.buffer.read_bytes_at(self.range_start, &mut slice)?;
         Ok(slice.into())
     }
 
@@ -304,9 +421,7 @@ impl<'a> gimli::Reader for SectionReader<'a> {
     fn to_string(&self) -> gimli::Result<borrow::Cow<str>> {
         // TODO: peek at the buffered reader
         let mut slice = vec![0; self.range_size as usize];
-        self.buffer
-            .borrow_mut()
-            .read_bytes_at(self.range_start, &mut slice)?;
+        self.buffer.read_bytes_at(self.range_start, &mut slice)?;
         match String::from_utf8(slice) {
             Ok(s) => Ok(s.into()),
             _ => Err(gimli::Error::BadUtf8),
@@ -317,9 +432,7 @@ impl<'a> gimli::Reader for SectionReader<'a> {
     fn to_string_lossy(&self) -> gimli::Result<borrow::Cow<str>> {
         // TODO: peek at the buffered reader
         let mut slice = vec![0; self.range_size as usize];
-        self.buffer
-            .borrow_mut()
-            .read_bytes_at(self.range_start, &mut slice)?;
+        self.buffer.read_bytes_at(self.range_start, &mut slice)?;
         Ok(String::from_utf8_lossy(&slice).into_owned().into())
     }
 
@@ -329,9 +442,7 @@ impl<'a> gimli::Reader for SectionReader<'a> {
         if self.range_size < size {
             return Err(gimli::Error::UnexpectedEof(self.offset_id()));
         }
-        self.buffer
-            .borrow_mut()
-            .read_bytes_at(self.range_start, buf)?;
+        self.buffer.read_bytes_at(self.range_start, buf)?;
         self.range_start += size;
         self.range_size -= size;
         Ok(())
