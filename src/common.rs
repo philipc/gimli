@@ -138,6 +138,14 @@ pub struct DebugMacroOffset<T = usize>(pub T);
 
 /// An offset into either the `.debug_ranges` section or the `.debug_rnglists` section,
 /// depending on the version of the unit the offset was contained in.
+///
+/// If this is a from a DWARF 4 DWO file, then it must additionally be
+/// offset by the value of `DW_AT_GNU_ranges_base`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RawRangeListsOffset<T = usize>(pub T);
+
+/// An offset into either the `.debug_ranges` section or the `.debug_rnglists` section,
+/// depending on the version of the unit the offset was contained in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RangeListsOffset<T = usize>(pub T);
 

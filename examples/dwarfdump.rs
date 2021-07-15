@@ -1382,7 +1382,8 @@ fn dump_attr_value<R: Reader, W: Write>(
         gimli::AttributeValue::DebugMacroRef(offset) => {
             writeln!(w, "<.debug_macro+0x{:08x}>", offset.0)?;
         }
-        gimli::AttributeValue::RangeListsRef(offset) => {
+        gimli::AttributeValue::RangeListsRef(_) => {
+            let offset = dwarf.attr_ranges_offset(unit, value)?.unwrap();
             dump_range_list(w, offset, unit, dwarf)?;
         }
         gimli::AttributeValue::DebugRngListsBase(base) => {
