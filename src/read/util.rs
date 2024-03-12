@@ -11,7 +11,7 @@ use core::slice;
 mod sealed {
     /// # Safety
     /// Implementer must not modify the content in storage.
-    pub unsafe trait Sealed {
+    pub unsafe trait ArrayLikedSealed {
         type Storage;
 
         fn new_storage() -> Self::Storage;
@@ -30,7 +30,7 @@ use sealed::*;
 /// Marker trait for types that can be used as backing storage when a growable array type is needed.
 ///
 /// This trait is sealed and cannot be implemented for types outside this crate.
-pub trait ArrayLike: Sealed {
+pub trait ArrayLike: ArrayLikedSealed {
     /// Type of the elements being stored.
     type Item;
 
@@ -41,8 +41,28 @@ pub trait ArrayLike: Sealed {
     fn as_mut_slice(storage: &mut Self::Storage) -> &mut [MaybeUninit<Self::Item>];
 }
 
+// TODO sealed
+#[allow(missing_docs)]
+pub trait VecLike: VecLikeSealed {}
+
+pub(crate) trait VecLikeStorage: Default + ops::Deref<Target = [Self::Item]> + ops::DerefMut {
+    type Item;
+
+    fn clear(&mut self);
+    fn pop(&mut self) -> Option<Self::Item>;
+    fn try_push(&mut self, value: Self::Item) -> Result<(), CapacityFull>;
+    fn try_insert(&mut self, index: usize, element: Self::Item) -> Result<(), CapacityFull>;
+    fn swap_remove(&mut self, index: usize) -> Self::Item;
+}
+
+#[allow(missing_docs)]
+pub(crate) trait VecLikeSealed {
+    type Storage: VecLikeStorage<Item = Self::Item>;
+    type Item;
+}
+
 // SAFETY: does not modify the content in storage.
-unsafe impl<T, const N: usize> Sealed for [T; N] {
+unsafe impl<T, const N: usize> ArrayLikedSealed for [T; N] {
     type Storage = [MaybeUninit<T>; N];
 
     fn new_storage() -> Self::Storage {
@@ -64,8 +84,17 @@ impl<T, const N: usize> ArrayLike for [T; N] {
 }
 
 #[cfg(feature = "read")]
+impl<T, const N: usize> VecLike for [T; N] {}
+
+#[cfg(feature = "read")]
+impl<T, const N: usize> VecLikeSealed for [T; N] {
+    type Storage = ArrayVec<[T; N]>;
+    type Item = T;
+}
+
+#[cfg(feature = "read")]
 // SAFETY: does not modify the content in storage.
-unsafe impl<T, const N: usize> Sealed for Box<[T; N]> {
+unsafe impl<T, const N: usize> ArrayLikedSealed for Box<[T; N]> {
     type Storage = Box<[MaybeUninit<T>; N]>;
 
     fn new_storage() -> Self::Storage {
@@ -88,34 +117,12 @@ impl<T, const N: usize> ArrayLike for Box<[T; N]> {
 }
 
 #[cfg(feature = "read")]
-unsafe impl<T> Sealed for Vec<T> {
-    type Storage = Box<[MaybeUninit<T>]>;
-
-    fn new_storage() -> Self::Storage {
-        Box::new([])
-    }
-
-    fn grow(storage: &mut Self::Storage, additional: usize) -> Result<(), CapacityFull> {
-        let mut vec: Vec<_> = core::mem::replace(storage, Box::new([])).into();
-        vec.reserve(additional);
-        // SAFETY: This is a `Vec` of `MaybeUninit`.
-        unsafe { vec.set_len(vec.capacity()) };
-        *storage = vec.into_boxed_slice();
-        Ok(())
-    }
-}
+impl<T, const N: usize> VecLike for Box<[T; N]> {}
 
 #[cfg(feature = "read")]
-impl<T> ArrayLike for Vec<T> {
+impl<T, const N: usize> VecLikeSealed for Box<[T; N]> {
+    type Storage = ArrayVec<Box<[T; N]>>;
     type Item = T;
-
-    fn as_slice(storage: &Self::Storage) -> &[MaybeUninit<T>] {
-        storage
-    }
-
-    fn as_mut_slice(storage: &mut Self::Storage) -> &mut [MaybeUninit<T>] {
-        storage
-    }
 }
 
 pub(crate) struct ArrayVec<A: ArrayLike> {
@@ -130,8 +137,12 @@ impl<A: ArrayLike> ArrayVec<A> {
             len: 0,
         }
     }
+}
 
-    pub fn clear(&mut self) {
+impl<A: ArrayLike> VecLikeStorage for ArrayVec<A> {
+    type Item = A::Item;
+
+    fn clear(&mut self) {
         let ptr: *mut [A::Item] = &mut **self;
         // Set length first so the type invariant is upheld even if `drop_in_place` panicks.
         self.len = 0;
@@ -139,7 +150,7 @@ impl<A: ArrayLike> ArrayVec<A> {
         unsafe { ptr::drop_in_place(ptr) };
     }
 
-    pub fn try_push(&mut self, value: A::Item) -> Result<(), CapacityFull> {
+    fn try_push(&mut self, value: A::Item) -> Result<(), CapacityFull> {
         let mut storage = A::as_mut_slice(&mut self.storage);
         if self.len >= storage.len() {
             A::grow(&mut self.storage, 1)?;
@@ -151,7 +162,7 @@ impl<A: ArrayLike> ArrayVec<A> {
         Ok(())
     }
 
-    pub fn try_insert(&mut self, index: usize, element: A::Item) -> Result<(), CapacityFull> {
+    fn try_insert(&mut self, index: usize, element: A::Item) -> Result<(), CapacityFull> {
         assert!(index <= self.len);
 
         let mut storage = A::as_mut_slice(&mut self.storage);
@@ -170,7 +181,7 @@ impl<A: ArrayLike> ArrayVec<A> {
         Ok(())
     }
 
-    pub fn pop(&mut self) -> Option<A::Item> {
+    fn pop(&mut self) -> Option<A::Item> {
         if self.len == 0 {
             None
         } else {
@@ -180,7 +191,7 @@ impl<A: ArrayLike> ArrayVec<A> {
         }
     }
 
-    pub fn swap_remove(&mut self, index: usize) -> A::Item {
+    fn swap_remove(&mut self, index: usize) -> A::Item {
         assert!(self.len > 0);
         A::as_mut_slice(&mut self.storage).swap(index, self.len - 1);
         self.pop().unwrap()
@@ -188,14 +199,38 @@ impl<A: ArrayLike> ArrayVec<A> {
 }
 
 #[cfg(feature = "read")]
-impl<T> ArrayVec<Vec<T>> {
-    pub fn into_vec(mut self) -> Vec<T> {
-        let len = core::mem::replace(&mut self.len, 0);
-        let storage = core::mem::replace(&mut self.storage, Box::new([]));
-        let slice = Box::leak(storage);
-        debug_assert!(len <= slice.len());
-        // SAFETY: valid elements.
-        unsafe { Vec::from_raw_parts(slice.as_mut_ptr() as *mut T, len, slice.len()) }
+impl<T> VecLike for Vec<T> {}
+
+#[cfg(feature = "read")]
+impl<T> VecLikeSealed for Vec<T> {
+    type Storage = Vec<T>;
+    type Item = T;
+}
+
+#[cfg(feature = "read")]
+impl<T> VecLikeStorage for Vec<T> {
+    type Item = T;
+
+    fn clear(&mut self) {
+        Vec::clear(self)
+    }
+
+    fn try_push(&mut self, value: T) -> Result<(), CapacityFull> {
+        Vec::push(self, value);
+        Ok(())
+    }
+
+    fn try_insert(&mut self, index: usize, element: T) -> Result<(), CapacityFull> {
+        Vec::insert(self, index, element);
+        Ok(())
+    }
+
+    fn pop(&mut self) -> Option<T> {
+        Vec::pop(self)
+    }
+
+    fn swap_remove(&mut self, index: usize) -> T {
+        Vec::swap_remove(self, index)
     }
 }
 
@@ -261,5 +296,70 @@ where
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         fmt::Debug::fmt(&**self, f)
+    }
+}
+
+pub(crate) struct VecStorage<V: VecLike> {
+    storage: V::Storage,
+}
+
+impl<T> From<VecStorage<Vec<T>>> for Vec<T> {
+    fn from(storage: VecStorage<Vec<T>>) -> Self {
+        storage.storage
+    }
+}
+
+impl<V: VecLike> Default for VecStorage<V> {
+    fn default() -> Self {
+        Self {
+            storage: V::Storage::default(),
+        }
+    }
+}
+
+impl<V: VecLike> Clone for VecStorage<V>
+where
+    V::Item: Clone,
+{
+    fn clone(&self) -> Self {
+        let mut new = Self::default();
+        for value in &*self.storage {
+            new.storage.try_push(value.clone()).unwrap();
+        }
+        new
+    }
+}
+
+impl<V: VecLike> ops::Deref for VecStorage<V> {
+    type Target = V::Storage;
+
+    fn deref(&self) -> &V::Storage {
+        &self.storage
+    }
+}
+
+impl<V: VecLike> ops::DerefMut for VecStorage<V> {
+    fn deref_mut(&mut self) -> &mut V::Storage {
+        &mut self.storage
+    }
+}
+
+impl<V: VecLike> PartialEq for VecStorage<V>
+where
+    V::Item: PartialEq,
+{
+    fn eq(&self, other: &Self) -> bool {
+        &*self.storage == &*other.storage
+    }
+}
+
+impl<V: VecLike> Eq for VecStorage<V> where V::Item: Eq {}
+
+impl<V: VecLike> fmt::Debug for VecStorage<V>
+where
+    V::Item: fmt::Debug,
+{
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Debug::fmt(&*self.storage, f)
     }
 }

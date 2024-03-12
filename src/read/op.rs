@@ -4,7 +4,7 @@
 use alloc::vec::Vec;
 use core::mem;
 
-use super::util::{ArrayLike, ArrayVec};
+use super::util::{VecLike, VecLikeStorage, VecStorage};
 use crate::common::{DebugAddrIndex, DebugInfoOffset, Encoding, Register};
 use crate::constants;
 use crate::read::{Error, Reader, ReaderOffset, Result, StoreOnHeap, UnitOffset, Value, ValueType};
@@ -1043,11 +1043,11 @@ on the heap using [`Vec`]. This is the default storage type parameter for [`Eval
 /// ```
 pub trait EvaluationStorage<R: Reader> {
     /// The storage used for the evaluation stack.
-    type Stack: ArrayLike<Item = Value>;
+    type Stack: VecLike<Item = Value>;
     /// The storage used for the expression stack.
-    type ExpressionStack: ArrayLike<Item = (R, R)>;
+    type ExpressionStack: VecLike<Item = (R, R)>;
     /// The storage used for the results.
-    type Result: ArrayLike<Item = Piece<R>>;
+    type Result: VecLike<Item = Piece<R>>;
 }
 
 #[cfg(feature = "read")]
@@ -1117,17 +1117,17 @@ pub struct Evaluation<R: Reader, S: EvaluationStorage<R> = StoreOnHeap> {
     addr_mask: u64,
 
     // The stack.
-    stack: ArrayVec<S::Stack>,
+    stack: VecStorage<S::Stack>,
 
     // The next operation to decode and evaluate.
     pc: R,
 
     // If we see a DW_OP_call* operation, the previous PC and bytecode
     // is stored here while evaluating the subroutine.
-    expression_stack: ArrayVec<S::ExpressionStack>,
+    expression_stack: VecStorage<S::ExpressionStack>,
 
     value_result: Option<Value>,
-    result: ArrayVec<S::Result>,
+    result: VecStorage<S::Result>,
 }
 
 #[cfg(feature = "read")]
@@ -1146,7 +1146,7 @@ impl<R: Reader> Evaluation<R> {
     /// Panics if this `Evaluation` has not been driven to completion.
     pub fn result(self) -> Vec<Piece<R>> {
         match self.state {
-            EvaluationState::Complete => self.result.into_vec(),
+            EvaluationState::Complete => self.result.into(),
             _ => {
                 panic!("Called `Evaluation::result` on an `Evaluation` that has not been completed")
             }

@@ -7,7 +7,7 @@ use core::iter::FromIterator;
 use core::mem;
 use core::num::Wrapping;
 
-use super::util::{ArrayLike, ArrayVec};
+use super::util::{VecLike, VecLikeStorage, VecStorage};
 use crate::common::{
     DebugFrameOffset, EhFrameOffset, Encoding, Format, Register, SectionId, Vendor,
 };
@@ -1915,10 +1915,10 @@ pub trait UnwindContextStorage<R: Reader>: Sized {
     /// The storage used for register rules in a unwind table row.
     ///
     /// Note that this is nested within the stack.
-    type Rules: ArrayLike<Item = (Register, RegisterRule<R>)>;
+    type Rules: VecLike<Item = (Register, RegisterRule<R>)>;
 
     /// The storage used for unwind table row stack.
-    type Stack: ArrayLike<Item = UnwindTableRow<R, Self>>;
+    type Stack: VecLike<Item = UnwindTableRow<R, Self>>;
 }
 
 #[cfg(feature = "read")]
@@ -1970,7 +1970,7 @@ pub struct UnwindContext<R: Reader, A: UnwindContextStorage<R> = StoreOnHeap> {
     // Stack of rows. The last row is the row currently being built by the
     // program. There is always at least one row. The vast majority of CFI
     // programs will only ever have one row on the stack.
-    stack: ArrayVec<A::Stack>,
+    stack: VecStorage<A::Stack>,
 
     // If we are evaluating an FDE's instructions, then `is_initialized` will be
     // `true`. If `initial_rule` is `Some`, then the initial register rules are either
@@ -2060,7 +2060,7 @@ impl<R: Reader, A: UnwindContextStorage<R>> UnwindContext<R, A> {
 
     fn save_initial_rules(&mut self) -> Result<()> {
         debug_assert!(!self.is_initialized);
-        self.initial_rule = match *self.stack.last().unwrap().registers.rules {
+        self.initial_rule = match **self.stack.last().unwrap().registers.rules {
             // All rules are default (undefined). In this case just synthesize
             // an undefined rule.
             [] => Some((Register(0), RegisterRule::Undefined)),
@@ -2512,7 +2512,7 @@ impl<'a, 'ctx, R: Reader, A: UnwindContextStorage<R>> UnwindTable<'a, 'ctx, R, A
 // - https://github.com/libunwind/libunwind/blob/11fd461095ea98f4b3e3a361f5a8a558519363fa/include/tdep-arm/dwarf-config.h#L31
 // - https://github.com/libunwind/libunwind/blob/11fd461095ea98f4b3e3a361f5a8a558519363fa/include/tdep-mips/dwarf-config.h#L31
 struct RegisterRuleMap<R: Reader, S: UnwindContextStorage<R> = StoreOnHeap> {
-    rules: ArrayVec<S::Rules>,
+    rules: VecStorage<S::Rules>,
 }
 
 impl<R: Reader, S: UnwindContextStorage<R>> Debug for RegisterRuleMap<R, S> {
@@ -2573,7 +2573,7 @@ impl<R: Reader, S: UnwindContextStorage<R>> RegisterRuleMap<R, S> {
             return Ok(());
         }
 
-        for &mut (reg, ref mut old_rule) in &mut *self.rules {
+        for &mut (reg, ref mut old_rule) in &mut **self.rules {
             debug_assert!(old_rule.is_defined());
             if reg == register {
                 *old_rule = rule;
@@ -2617,14 +2617,14 @@ where
     R: Reader + PartialEq,
 {
     fn eq(&self, rhs: &Self) -> bool {
-        for &(reg, ref rule) in &*self.rules {
+        for &(reg, ref rule) in &**self.rules {
             debug_assert!(rule.is_defined());
             if *rule != rhs.get(reg) {
                 return false;
             }
         }
 
-        for &(reg, ref rhs_rule) in &*rhs.rules {
+        for &(reg, ref rhs_rule) in &**rhs.rules {
             debug_assert!(rhs_rule.is_defined());
             if *rhs_rule != self.get(reg) {
                 return false;
