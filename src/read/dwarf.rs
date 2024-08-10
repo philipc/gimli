@@ -1252,7 +1252,6 @@ impl<R: Reader> Unit<R> {
                 offset,
                 unit.header.address_size(),
                 unit.comp_dir.clone(),
-                unit.name.clone(),
             )?),
             None => None,
         };

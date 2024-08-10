@@ -122,17 +122,13 @@ fn test_parse_self_debug_line() {
             .attr_value(gimli::DW_AT_comp_dir)
             .expect("Should parse comp_dir attribute")
             .and_then(|val| val.string_value(&debug_str));
-        let comp_name = unit_entry
-            .attr_value(gimli::DW_AT_name)
-            .expect("Should parse name attribute")
-            .and_then(|val| val.string_value(&debug_str));
 
         if let Some(AttributeValue::DebugLineRef(offset)) = unit_entry
             .attr_value(gimli::DW_AT_stmt_list)
             .expect("Should parse stmt_list")
         {
             let program = debug_line
-                .program(offset, unit.address_size(), comp_dir, comp_name)
+                .program(offset, unit.address_size(), comp_dir)
                 .expect("should parse line number program header");
 
             let mut results = Vec::new();
@@ -146,7 +142,7 @@ fn test_parse_self_debug_line() {
             results.reverse();
 
             let program = debug_line
-                .program(offset, unit.address_size(), comp_dir, comp_name)
+                .program(offset, unit.address_size(), comp_dir)
                 .expect("should parse line number program header");
             let (program, sequences) = program
                 .sequences()

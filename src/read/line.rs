@@ -47,8 +47,7 @@ impl<R: Reader> DebugLine<R> {
     ///
     /// The `address_size` must match the compilation unit that the lines apply to.
     /// The `comp_dir` should be from the `DW_AT_comp_dir` attribute of the compilation
-    /// unit. The `comp_name` should be from the `DW_AT_name` attribute of the
-    /// compilation unit.
+    /// unit.
     ///
     /// ```rust,no_run
     /// use gimli::{DebugLine, DebugLineOffset, IncompleteLineProgram, EndianSlice, LittleEndian};
@@ -63,7 +62,7 @@ impl<R: Reader> DebugLine<R> {
     /// let offset = DebugLineOffset(0);
     /// let address_size = 8;
     ///
-    /// let program = debug_line.program(offset, address_size, None, None)
+    /// let program = debug_line.program(offset, address_size, None)
     ///     .expect("should have found a header at that offset, and parsed it OK");
     /// ```
     pub fn program(
@@ -71,11 +70,10 @@ impl<R: Reader> DebugLine<R> {
         offset: DebugLineOffset<R::Offset>,
         address_size: u8,
         comp_dir: Option<R>,
-        comp_name: Option<R>,
     ) -> Result<IncompleteLineProgram<R>> {
         let input = &mut self.debug_line_section.clone();
         input.skip(offset.0)?;
-        let header = LineProgramHeader::parse(input, offset, address_size, comp_dir, comp_name)?;
+        let header = LineProgramHeader::parse(input, offset, address_size, comp_dir)?;
         let program = IncompleteLineProgram { header };
         Ok(program)
     }
@@ -1037,9 +1035,6 @@ where
 
     /// The current directory of the compilation.
     comp_dir: Option<R>,
-
-    /// The primary source file.
-    comp_file: Option<FileEntry<R, Offset>>,
 }
 
 impl<R, Offset> LineProgramHeader<R, Offset>
@@ -1208,12 +1203,11 @@ where
     /// The source file with the given file index.
     ///
     /// A file index of 0 corresponds to the compilation unit file.
-    /// Note that a file index of 0 is invalid for DWARF version <= 4,
-    /// but we support it anyway.
+    /// Note that a file index of 0 is invalid for DWARF version <= 4.
     pub fn file(&self, file: u64) -> Option<&FileEntry<R, Offset>> {
         if self.encoding.version <= 4 {
             if file == 0 {
-                self.comp_file.as_ref()
+                None
             } else {
                 let file = file as usize - 1;
                 self.file_names.get(file)
@@ -1258,7 +1252,6 @@ where
         offset: DebugLineOffset<Offset>,
         mut address_size: u8,
         mut comp_dir: Option<R>,
-        comp_name: Option<R>,
     ) -> Result<LineProgramHeader<R, Offset>> {
         let (unit_length, format) = input.read_initial_length()?;
         let rest = &mut input.split(unit_length)?;
@@ -1346,19 +1339,9 @@ where
             }
         }
 
-        let comp_file;
         let file_name_entry_format;
         let mut file_names = Vec::new();
         if version <= 4 {
-            comp_file = comp_name.map(|name| FileEntry {
-                path_name: AttributeValue::String(name),
-                directory_index: 0,
-                timestamp: 0,
-                size: 0,
-                md5: [0; 16],
-                source: None,
-            });
-
             file_name_entry_format = Vec::new();
             loop {
                 let path_name = rest.read_null_terminated_slice()?;
@@ -1368,7 +1351,6 @@ where
                 file_names.push(FileEntry::parse(rest, path_name)?);
             }
         } else {
-            comp_file = None;
             file_name_entry_format = FileEntryFormat::parse(rest)?;
             let count = rest.read_uleb128()?;
             for _ in 0..count {
@@ -1390,7 +1372,6 @@ where
             file_names,
             program_buf,
             comp_dir,
-            comp_file,
         };
         Ok(header)
     }
@@ -1937,10 +1918,9 @@ mod tests {
 
         let rest = &mut EndianSlice::new(&buf, LittleEndian);
         let comp_dir = EndianSlice::new(b"/comp_dir", LittleEndian);
-        let comp_name = EndianSlice::new(b"/comp_name", LittleEndian);
 
         let header =
-            LineProgramHeader::parse(rest, DebugLineOffset(0), 4, Some(comp_dir), Some(comp_name))
+            LineProgramHeader::parse(rest, DebugLineOffset(0), 4, Some(comp_dir))
                 .expect("should parse header ok");
 
         assert_eq!(
@@ -1957,10 +1937,6 @@ mod tests {
         assert_eq!(header.line_range(), 1);
         assert_eq!(header.opcode_base(), 3);
         assert_eq!(header.directory(0), Some(AttributeValue::String(comp_dir)));
-        assert_eq!(
-            header.file(0).unwrap().path_name,
-            AttributeValue::String(comp_name)
-        );
 
         let expected_lengths = [1, 2];
         assert_eq!(header.standard_opcode_lengths().slice(), &expected_lengths);
@@ -2047,7 +2023,7 @@ mod tests {
 
         let input = &mut EndianSlice::new(&buf, LittleEndian);
 
-        match LineProgramHeader::parse(input, DebugLineOffset(0), 4, None, None) {
+        match LineProgramHeader::parse(input, DebugLineOffset(0), 4, None) {
             Err(Error::UnexpectedEof(_)) => {}
             otherwise => panic!("Unexpected result: {:?}", otherwise),
         }
@@ -2108,7 +2084,7 @@ mod tests {
 
         let input = &mut EndianSlice::new(&buf, LittleEndian);
 
-        match LineProgramHeader::parse(input, DebugLineOffset(0), 4, None, None) {
+        match LineProgramHeader::parse(input, DebugLineOffset(0), 4, None) {
             Err(Error::UnexpectedEof(_)) => {}
             otherwise => panic!("Unexpected result: {:?}", otherwise),
         }
@@ -2161,7 +2137,6 @@ mod tests {
             file_name_entry_format: vec![],
             program_buf: buf,
             comp_dir: None,
-            comp_file: None,
         }
     }
 
@@ -3049,7 +3024,7 @@ mod tests {
 
             let input = &mut EndianSlice::new(&section, LittleEndian);
 
-            let header = LineProgramHeader::parse(input, DebugLineOffset(0), 0, None, None)
+            let header = LineProgramHeader::parse(input, DebugLineOffset(0), 0, None)
                 .expect("should parse header ok");
 
             assert_eq!(header.raw_program_buf().slice(), expected_program);
@@ -3166,7 +3141,7 @@ mod tests {
 
         let rest = &mut EndianSlice::new(&buf, LittleEndian);
 
-        let header = LineProgramHeader::parse(rest, DebugLineOffset(0), 4, None, None)
+        let header = LineProgramHeader::parse(rest, DebugLineOffset(0), 4, None)
             .expect("should parse header ok");
         let program = IncompleteLineProgram { header };
 
