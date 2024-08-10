@@ -117,7 +117,7 @@ fn test_convert_debug_info() {
         ..Default::default()
     };
 
-    let dwarf = write::Dwarf::from(&dwarf, &|address| Some(Address::Constant(address)))
+    let mut dwarf = write::Dwarf::from(&dwarf, &|address| Some(Address::Constant(address)))
         .expect("Should convert DWARF information");
 
     assert_eq!(dwarf.units.count(), 23);
@@ -126,6 +126,29 @@ fn test_convert_debug_info() {
         .sum();
     assert_eq!(entries, 29_560);
     assert_eq!(dwarf.strings.count(), 3921);
+
+    let mut obj = object::write::Object::new(
+        object::BinaryFormat::native_object(),
+        object::Architecture::X86_64,
+        object::Endianness::Little,
+    );
+
+    let mut sections = gimli::write::Sections::new(gimli::write::EndianVec::new(LittleEndian));
+    dwarf.write(&mut sections).unwrap();
+
+    // Add the DWARF section data to the object file.
+    sections.for_each_mut(|id, section| -> object::write::Result<()> {
+        if section.slice().is_empty() {
+            return Ok(());
+        }
+        let section_id = obj.add_section(Vec::new(), id.name().into(), object::SectionKind::Debug);
+        obj.set_section_data(section_id, section.take(), 1);
+
+        Ok(())
+    }).unwrap();
+
+    let file = std::fs::File::create("self.out").unwrap();
+    obj.write_stream(file).unwrap();
 }
 
 #[test]
