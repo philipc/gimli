@@ -881,15 +881,15 @@ where
     /// Find the first attribute in this entry which has the given name.
     ///
     /// Returns `None` if no attribute is found.
-    pub fn attr(&self, name: constants::DwAt) -> Option<&Attribute<R>> {
-        self.attrs.iter().find(|attr| attr.name == name)
+    pub fn attr(&mut self, name: constants::DwAt) -> Option<&mut Attribute<R>> {
+        self.attrs.iter_mut().find(|attr| attr.name == name)
     }
 
     /// Find the first attribute in this entry which has the given name,
     /// and return its raw value.
     ///
     /// Returns `None` if no attribute is found.
-    pub fn attr_value_raw(&self, name: constants::DwAt) -> Option<AttributeValue<R>> {
+    pub fn attr_value_raw(&mut self, name: constants::DwAt) -> Option<AttributeValue<R>> {
         self.attr(name).map(Attribute::raw_value)
     }
 
@@ -898,7 +898,7 @@ where
     ///
     /// Returns `None` if no attribute is found.
     pub fn attr_value(&self, name: constants::DwAt) -> Option<AttributeValue<R>> {
-        self.attr(name).map(Attribute::value)
+        self.attrs.iter().find(|attr| attr.name == name).map(Attribute::value)
     }
 
     /// Use the `DW_AT_sibling` attribute to find the offset for the
@@ -1125,8 +1125,10 @@ impl<R: Reader> Attribute<R> {
     }
 
     /// Get this attribute's raw value.
-    pub fn raw_value(&self) -> AttributeValue<R> {
-        self.value.clone()
+    pub fn raw_value(&mut self) -> AttributeValue<R> {
+        let mut value = AttributeValue::Addr(0);
+        std::mem::swap(&mut self.value, &mut value);
+        value
     }
 
     /// Get this attribute's normalized value.
@@ -2670,12 +2672,12 @@ impl<'abbrev, R: Reader> EntriesCursor<'abbrev, R> {
     ///     );
     /// }
     /// ```
-    pub fn next_dfs(&mut self) -> Result<Option<&DebuggingInformationEntry<R>>> {
+    pub fn next_dfs(&mut self) -> Result<Option<&mut DebuggingInformationEntry<R>>> {
         loop {
             // The next entry should be the one we want.
             if self.next_entry()? {
                 if !self.cached_current.is_null() {
-                    return Ok(Some(&self.cached_current));
+                    return Ok(Some(&mut self.cached_current));
                 }
             } else {
                 return Ok(None);
@@ -2971,9 +2973,9 @@ impl<'abbrev, 'tree, R: Reader> EntriesTreeNode<'abbrev, 'tree, R> {
     }
 
     /// Returns the current entry in the tree.
-    pub fn entry(&self) -> &DebuggingInformationEntry<R> {
+    pub fn entry(&mut self) -> &mut DebuggingInformationEntry<R> {
         // We never create a node with a null entry.
-        &self.tree.entry
+        &mut self.tree.entry
     }
 
     /// Create an iterator for the children of the current entry.
@@ -4170,7 +4172,7 @@ mod tests {
             unit.encoding.format = format;
             unit.encoding.version = version;
             let spec = AttributeSpecification::new(name, form, None);
-            let attribute =
+            let mut attribute =
                 parse_attribute(&mut input, unit.encoding(), spec).expect("Should parse attribute");
             assert_eq!(attribute.raw_value(), expect_raw);
             assert_eq!(attribute.value(), expect_value);
@@ -5496,7 +5498,7 @@ mod tests {
         where
             Endian: Endianity,
         {
-            let node = node
+            let mut node = node
                 .expect("Should parse entry")
                 .expect("Should have entry");
             assert_entry_name(node.entry(), name);

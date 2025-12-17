@@ -2364,16 +2364,16 @@ pub(crate) mod convert {
     ///             continue;
     ///         }
     ///         let id = unit.add_entry(id, &entry);
-    ///         convert_attributes(&mut unit, id, &entry)?;
+    ///         convert_attributes(&mut unit, id, &mut entry)?;
     ///     }
     /// }
     ///
     /// fn convert_attributes<R: gimli::Reader<Offset = usize>>(
     ///     unit: &mut gimli::write::ConvertUnit<'_, R>,
     ///     id: gimli::write::UnitEntryId,
-    ///     entry: &gimli::write::ConvertUnitEntry<'_, R>,
+    ///     entry: &mut gimli::write::ConvertUnitEntry<'_, R>,
     /// ) -> gimli::write::ConvertResult<()> {
-    ///     for attr in &entry.attrs {
+    ///     for attr in &mut entry.read_entry.attrs {
     ///         let value = unit.convert_attribute_value(
     ///             entry.read_unit,
     ///             attr,
@@ -2658,21 +2658,21 @@ pub(crate) mod convert {
         /// See [`Dwarf::from`](crate::write::Dwarf::from) for the meaning of `convert_address`.
         pub fn convert(
             &mut self,
-            root_entry: ConvertUnitEntry<'a, R>,
+            mut root_entry: ConvertUnitEntry<'a, R>,
             convert_address: &dyn Fn(u64) -> Option<Address>,
         ) -> ConvertResult<()> {
             if let Some(convert_program) = self.read_line_program(None, None)? {
                 let (program, files) = convert_program.convert(convert_address)?;
                 self.set_line_program(program, files);
             }
-            self.convert_attributes(self.unit.root(), &root_entry, convert_address)?;
+            self.convert_attributes(self.unit.root(), &mut root_entry, convert_address)?;
             let mut entry = root_entry;
             while let Some(id) = self.read_entry(&mut entry)? {
                 if id.is_none() {
                     continue;
                 }
                 let id = self.add_entry(id, &entry);
-                self.convert_attributes(id, &entry, convert_address)?;
+                self.convert_attributes(id, &mut entry, convert_address)?;
             }
             Ok(())
         }
@@ -2680,10 +2680,10 @@ pub(crate) mod convert {
         pub(crate) fn convert_attributes(
             &mut self,
             id: UnitEntryId,
-            entry: &ConvertUnitEntry<'_, R>,
+            entry: &mut ConvertUnitEntry<'_, R>,
             convert_address: &dyn Fn(u64) -> Option<Address>,
         ) -> ConvertResult<()> {
-            for attr in &entry.attrs {
+            for attr in &mut entry.read_entry.attrs {
                 if attr.name() == constants::DW_AT_GNU_locviews {
                     // This is a GNU extension that is not supported, and is safe to ignore.
                     // TODO: remove this when we support it.
@@ -2705,7 +2705,7 @@ pub(crate) mod convert {
         pub fn convert_attribute_value(
             &mut self,
             read_unit: read::UnitRef<'_, R>,
-            attr: &read::Attribute<R>,
+            attr: &mut read::Attribute<R>,
             convert_address: &dyn Fn(u64) -> Option<Address>,
         ) -> ConvertResult<AttributeValue> {
             if attr.form() == constants::DW_FORM_implicit_const {
@@ -4151,7 +4151,7 @@ mod tests {
             entry.set(constants::DW_AT_name, AttributeValue::String(name.into()));
         }
         fn check_name<R: read::Reader>(
-            entry: &read::DebuggingInformationEntry<R>,
+            entry: &mut read::DebuggingInformationEntry<R>,
             unit: read::UnitRef<'_, R>,
             name: &str,
         ) {

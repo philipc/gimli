@@ -1223,7 +1223,7 @@ fn dump_entries<R: Reader, W: Write>(
         }
 
         for spec in abbrev.map(|x| x.attributes()).unwrap_or(&[]) {
-            let attr = entries.read_attribute(*spec)?;
+            let mut attr = entries.read_attribute(*spec)?;
             w.write_all(spaces(&mut spaces_buf, indent).as_bytes())?;
             if let Some(n) = attr.name().static_string() {
                 let right_padding = 27 - cmp::min(27, n.len());
@@ -1234,7 +1234,7 @@ fn dump_entries<R: Reader, W: Write>(
             if flags.raw {
                 writeln!(w, "{:?}", attr.raw_value())?;
             } else {
-                match dump_attr_value(w, &attr, unit) {
+                match dump_attr_value(w, &mut attr, unit) {
                     Ok(_) => (),
                     Err(err) => {
                         writeln_error(w, unit.dwarf, err, "Failed to dump attribute value")?
@@ -1272,7 +1272,7 @@ fn dump_entries<R: Reader, W: Write>(
 
 fn dump_attr_value<R: Reader, W: Write>(
     w: &mut W,
-    attr: &gimli::Attribute<R>,
+    attr: &mut gimli::Attribute<R>,
     unit: gimli::UnitRef<R>,
 ) -> Result<()> {
     let value = attr.value();

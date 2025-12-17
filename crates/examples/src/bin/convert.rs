@@ -140,7 +140,7 @@ fn convert_dwarf<R: gimli::Reader<Offset = usize>, W: gimli::write::Writer>(
     // Alternatively, start a conversion that reserves all DIEs.
     //let mut convert = dwarf.read_units(read_dwarf, None)?;
 
-    while let Some((mut unit, root_entry)) = convert.read_unit()? {
+    while let Some((mut unit, mut root_entry)) = convert.read_unit()? {
         if let Some(dwo_id) = unit.read_unit.dwo_id {
             let Some(dwp) = dwp else {
                 // TODO: try to load the .dwo
@@ -155,7 +155,7 @@ fn convert_dwarf<R: gimli::Reader<Offset = usize>, W: gimli::write::Writer>(
             convert_unit(
                 &mut split_unit,
                 split_root_entry,
-                Some(&root_entry),
+                Some(&mut root_entry),
                 write_sections,
             )?;
         } else {
@@ -168,8 +168,8 @@ fn convert_dwarf<R: gimli::Reader<Offset = usize>, W: gimli::write::Writer>(
 
 fn convert_unit<'a, R: gimli::Reader<Offset = usize>, W: gimli::write::Writer>(
     unit: &mut gimli::write::ConvertUnit<'a, R>,
-    root_entry: gimli::write::ConvertUnitEntry<'a, R>,
-    skeleton_root_entry: Option<&gimli::write::ConvertUnitEntry<'_, R>>,
+    mut root_entry: gimli::write::ConvertUnitEntry<'a, R>,
+    skeleton_root_entry: Option<&mut gimli::write::ConvertUnitEntry<'_, R>>,
     write_sections: &mut gimli::write::Sections<W>,
 ) -> gimli::write::ConvertResult<()> {
     // The line program needs to be converted before file indices in DIE attributes.
@@ -190,7 +190,7 @@ fn convert_unit<'a, R: gimli::Reader<Offset = usize>, W: gimli::write::Writer>(
     }
 
     let root_id = unit.unit.root();
-    convert_attributes(unit, root_id, &root_entry);
+    convert_attributes(unit, root_id, &mut root_entry);
     if let Some(skeleton_root_entry) = skeleton_root_entry {
         convert_attributes(unit, root_id, skeleton_root_entry);
     }
@@ -201,7 +201,7 @@ fn convert_unit<'a, R: gimli::Reader<Offset = usize>, W: gimli::write::Writer>(
             continue;
         }
         let id = unit.add_entry(id, &entry);
-        convert_attributes(unit, id, &entry);
+        convert_attributes(unit, id, &mut entry);
     }
     unit.write(write_sections)?;
     Ok(())
@@ -210,9 +210,9 @@ fn convert_unit<'a, R: gimli::Reader<Offset = usize>, W: gimli::write::Writer>(
 fn convert_attributes<R: gimli::Reader<Offset = usize>>(
     unit: &mut gimli::write::ConvertUnit<'_, R>,
     id: gimli::write::UnitEntryId,
-    entry: &gimli::write::ConvertUnitEntry<'_, R>,
+    entry: &mut gimli::write::ConvertUnitEntry<'_, R>,
 ) {
-    for attr in &entry.attrs {
+    for attr in &mut entry.read_entry.attrs {
         match unit.convert_attribute_value(entry.read_unit, attr, &|address| {
             Some(gimli::write::Address::Constant(address))
         }) {
@@ -221,7 +221,7 @@ fn convert_attributes<R: gimli::Reader<Offset = usize>>(
                 // Invalid input DWARF has most often been seen for expressions.
                 eprintln!(
                     "Warning: failed to convert attribute for DIE {:x}: {} = {:?}: {}",
-                    unit.read_unit.offset().0 + entry.offset.0,
+                    unit.read_unit.offset().0 + entry.read_entry.offset.0,
                     attr.name(),
                     attr.raw_value(),
                     e

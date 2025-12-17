@@ -221,7 +221,7 @@ fn impl_bench_parsing_debug_info<const COUNT: usize, R: Reader>(
         let mut cursor = unit.entries(&abbrevs);
         while let Some(entry) = cursor.next_dfs().expect("Should parse next dfs") {
             for _ in 0..COUNT {
-                for attr in entry.attrs() {
+                for attr in &mut entry.attrs {
                     let name = attr.name();
                     black_box(name);
                     let value = attr.raw_value();
@@ -280,9 +280,9 @@ fn bench_entries_tree<const COUNT: usize>(b: &mut Bencher) {
     });
 }
 
-fn parse_debug_info_tree<const COUNT: usize, R: Reader>(node: EntriesTreeNode<R>) {
+fn parse_debug_info_tree<const COUNT: usize, R: Reader>(mut node: EntriesTreeNode<R>) {
     for _ in 0..COUNT {
-        for attr in node.entry().attrs() {
+        for attr in &mut node.entry().attrs {
             let name = attr.name();
             black_box(name);
             let value = attr.raw_value();
@@ -319,7 +319,7 @@ fn bench_entries_raw_call(b: &mut Bencher) {
                     .expect("Should parse abbreviation code")
                 {
                     for spec in abbrev.attributes().iter().cloned() {
-                        let attr = read_attribute(&mut raw, spec).expect("Should parse attribute");
+                        let mut attr = read_attribute(&mut raw, spec).expect("Should parse attribute");
                         let name = attr.name();
                         black_box(name);
                         let value = attr.raw_value();
@@ -363,7 +363,7 @@ fn bench_entries_raw_inline(b: &mut Bencher) {
                     .expect("Should parse abbreviation code")
                 {
                     for spec in abbrev.attributes().iter().cloned() {
-                        let attr = raw
+                        let mut attr = raw
                             .read_attribute_inline(spec)
                             .expect("Should parse attribute");
                         let name = attr.name();
@@ -403,7 +403,7 @@ fn bench_entries_raw_bulk(b: &mut Bencher) {
                 {
                     raw.read_attributes(abbrev.attributes(), &mut attrs)
                         .expect("Should parse attributes");
-                    for attr in &attrs {
+                    for attr in &mut attrs {
                         let name = attr.name();
                         black_box(name);
                         let value = attr.raw_value();
